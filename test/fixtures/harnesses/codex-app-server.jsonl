@@ -1,0 +1,12 @@
+{"method":"thread/started","params":{"thread":{"id":"fixture-codex-thread"}}}
+{"method":"turn/started","params":{"threadId":"fixture-codex-thread","turn":{"id":"fixture-turn","status":"inProgress"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","itemId":"fixture-message","delta":"fixture answer"}}
+{"method":"item/started","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","item":{"type":"commandExecution","id":"fixture-call","command":"fixture command","status":"inProgress"}}}
+{"method":"item/commandExecution/outputDelta","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","itemId":"fixture-call","delta":"fixture output"}}
+{"method":"item/completed","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","item":{"type":"commandExecution","id":"fixture-call","command":"fixture command","status":"completed","aggregatedOutput":"fixture output","exitCode":0}}}
+{"method":"item/completed","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","item":{"type":"agentMessage","id":"fixture-message","text":"fixture answer"}}}
+{"method":"item/commandExecution/requestApproval","id":7,"params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","itemId":"fixture-call","approvalId":"fixture-approval","reason":"fixture approval"}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn","tokenUsage":{"last":{"inputTokens":10,"outputTokens":5,"totalTokens":15}}}}
+{"method":"account/rateLimits/updated","params":{"rateLimits":{}}}
+{"method":"thread/compacted","params":{"threadId":"fixture-codex-thread","turnId":"fixture-turn"}}
+{"method":"turn/completed","params":{"threadId":"fixture-codex-thread","turn":{"id":"fixture-turn","status":"completed"}}}

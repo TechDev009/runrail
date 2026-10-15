@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"fixture-codex-thread"}
+{"type":"turn.started","thread_id":"fixture-codex-thread","turn_id":"fixture-turn","prompt":"fixture"}
+{"type":"item.started","thread_id":"fixture-codex-thread","turn_id":"fixture-turn","item":{"type":"command_execution","id":"fixture-call","name":"fixture_command"}}
+{"type":"item.completed","thread_id":"fixture-codex-thread","turn_id":"fixture-turn","item":{"type":"agent_message","text":"fixture answer"}}
+{"type":"permission_request","thread_id":"fixture-codex-thread","turn_id":"fixture-turn","approval_id":"fixture-approval","action":"fixture action","capability":"fixture.command"}
+{"type":"rate_limit_event","thread_id":"fixture-codex-thread","turn_id":"fixture-turn"}
+{"type":"turn.interrupted","thread_id":"fixture-codex-thread","turn_id":"fixture-turn"}
+{"type":"turn.failed","thread_id":"fixture-codex-thread","turn_id":"fixture-turn"}
+{"type":"turn.completed","thread_id":"fixture-codex-thread","turn_id":"fixture-turn"}

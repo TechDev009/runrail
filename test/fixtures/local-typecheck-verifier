@@ -1,0 +1,8 @@
+#!/usr/bin/env bun
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+
+const source = await readFile(join(process.cwd(), "index.ts"), "utf8")
+const ok = source.includes("const answer: number = 42") && !source.includes('const answer: number = "wrong"')
+process.stdout.write(JSON.stringify({ ok, diagnostics: ok ? [] : ["index.ts does not satisfy the fixture type check"] }))
+process.exit(ok ? 0 : 1)

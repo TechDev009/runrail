@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "piVersion": "0.84.1",
+  "fixtures": [
+    { "id": "pi-cli-help", "featureId": "cli.options", "surface": "cli", "outcome": "pass", "exitCode": 0, "argv": ["--help"] },
+    { "id": "pi-interactive-editor", "featureId": "interactive.editor", "surface": "interactive", "outcome": "pass", "exitCode": 0, "argv": ["--interactive"] },
+    { "id": "pi-interactive-commands", "featureId": "interactive.commands", "surface": "interactive", "outcome": "pass", "exitCode": 0, "eventTypes": ["command.registered", "command.executed"] },
+    { "id": "pi-interactive-hotkeys", "featureId": "interactive.hotkeys", "surface": "interactive", "outcome": "pass", "exitCode": 0, "eventTypes": ["key.accepted", "key.cancelled"] },
+    { "id": "pi-message-queue", "featureId": "interactive.message-queue", "surface": "interactive", "outcome": "pass", "exitCode": 0, "eventTypes": ["turn.queued", "turn.steered"] },
+    { "id": "pi-session-lifecycle", "featureId": "session.lifecycle", "surface": "sdk", "outcome": "pass", "exitCode": 0, "eventTypes": ["session.started", "session.updated", "session.completed"] },
+    { "id": "pi-session-compaction", "featureId": "session.compaction", "surface": "sdk", "outcome": "pass", "exitCode": 0, "eventTypes": ["session.compacting", "session.updated"] },
+    { "id": "pi-context-files", "featureId": "resource.context", "surface": "resource", "outcome": "pass", "exitCode": 0, "eventTypes": ["context.loaded"] },
+    { "id": "pi-prompt-templates", "featureId": "resource.templates", "surface": "resource", "outcome": "pass", "exitCode": 0, "eventTypes": ["template.expanded"] },
+    { "id": "pi-skills", "featureId": "resource.skills", "surface": "resource", "outcome": "pass", "exitCode": 0, "eventTypes": ["skill.loaded", "skill.reloaded"] },
+    { "id": "pi-extension-adapter", "featureId": "resource.extensions", "surface": "package", "outcome": "pass", "exitCode": 0, "eventTypes": ["extension.admitted", "extension.reloaded"] },
+    { "id": "pi-themes", "featureId": "resource.themes", "surface": "resource", "outcome": "pass", "exitCode": 0, "eventTypes": ["theme.loaded"] },
+    { "id": "pi-package-adapter", "featureId": "package.install", "surface": "package", "outcome": "pass", "exitCode": 0, "eventTypes": ["package.discovered", "package.refused"] },
+    { "id": "pi-provider-protocols", "featureId": "provider.protocols", "surface": "provider", "outcome": "pass", "exitCode": 0, "eventTypes": ["provider.selected", "provider.streamed"] },
+    { "id": "pi-auth", "featureId": "provider.auth", "surface": "provider", "outcome": "pass", "exitCode": 0, "eventTypes": ["credential.requested", "credential.released"] },
+    { "id": "pi-sdk-session", "featureId": "sdk.session", "surface": "sdk", "outcome": "pass", "exitCode": 0, "eventTypes": ["session.started", "event.received"] },
+    { "id": "pi-rpc-events", "featureId": "rpc.events", "surface": "rpc", "outcome": "pass", "exitCode": 0, "eventTypes": ["rpc.ready", "rpc.event", "rpc.closed"] },
+    { "id": "pi-rpc-refusal", "featureId": "rpc.refusal", "surface": "rpc", "outcome": "refused", "exitCode": 78, "refusalCode": "PI_UNSUPPORTED_PROTOCOL" },
+    { "id": "pi-session-transfer", "featureId": "session.import-export", "surface": "sdk", "outcome": "pass", "exitCode": 0, "eventTypes": ["session.exported", "session.imported"] },
+    { "id": "pi-sharing", "featureId": "sharing.remote", "surface": "sdk", "outcome": "refused", "exitCode": 78, "refusalCode": "CALLER_OWNED_SHARING" },
+    { "id": "pi-resource-discovery", "featureId": "resource.discovery", "surface": "resource", "outcome": "pass", "exitCode": 0, "eventTypes": ["resource.discovered", "resource.refused"] }
+  ]
+}

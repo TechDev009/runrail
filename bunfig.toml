@@ -1,0 +1,3 @@
+[test]
+# Keeps every test away from the real accounts directory and keychain (test/preload.ts).
+preload = ["./test/preload.ts"]

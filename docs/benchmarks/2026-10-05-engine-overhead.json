@@ -1,0 +1,1359 @@
+{
+  "created_utc": "2026-10-04T20:04:50.025976+00:00",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "bun_version": "1.4.2",
+  "openhuman_version": "0.64.10",
+  "runrail_version": "0.5.0",
+  "runrail_commit": "d49ff70e62500912caa8ecb7046fbd885256be29",
+  "openhuman_commit": "2eb8a33049915cc5e4b6c10c5c9f2ab99862e0ea",
+  "runrail_source": "git archive of pinned commit; frozen public dependencies; no working-tree files",
+  "runrail_lock_sha256": "b2b2767706b296f87cd289231c41793994e769fb2e25d52f0aa70fbb1df58df0",
+  "openhuman_release_sha256": "314a087a493f4e82acdbddf4ef5f1b9fe836b02fa8f5d9aff969c66924bc0b99",
+  "methodology": {
+    "mock_model": "benchmark-mock",
+    "actual_tool_calls": 0,
+    "cold_pairs": 15,
+    "cold_warmup_pairs": 2,
+    "warm_measured_turns": 30,
+    "warm_discarded_turns": 5,
+    "source_edits": false,
+    "disk_cache": "warm; fresh processes",
+    "poll_interval_ms": 5,
+    "memory": "macOS /usr/bin/time -l maximum RSS; includes shutdown; excludes mock server",
+    "runrail_route": "native authenticated control RPC turn.enqueue; persistent session",
+    "openhuman_route": "release app binary core headless API openhuman.agent_chat; one-shot agent per request",
+    "limitations": [
+      "Different tool catalogs, system prompts, provider parsing, streaming, and session reuse.",
+      "OpenHuman may make auxiliary model calls; all observed requests count in timings.",
+      "This compares complete configured entry points, not language execution speed.",
+      "OpenHuman is the release app binary in core mode, not its slim library-profile build.",
+      "No real model, tool execution, editing, verification, model-cost, or coding-quality comparison."
+    ],
+    "workspace_state": "Generated fixture directories were reused; cold means fresh process, not an empty filesystem or cold disk cache.",
+    "mock_response": "Constant completion marker for primary and auxiliary requests; no semantic model behavior.",
+    "runrail_native_capabilities": "Default native tool catalog; verification and extension discovery disabled."
+  },
+  "summary": {
+    "runrail": {
+      "ready_ms": {
+        "n": 15,
+        "median": 125.85758417844772,
+        "p95": 139.88166581839323,
+        "min": 120.11358398012817,
+        "max": 139.88166581839323
+      },
+      "first_turn_ms": {
+        "n": 15,
+        "median": 8.278292138129473,
+        "p95": 9.185415925458074,
+        "min": 7.408249890431762,
+        "max": 9.185415925458074
+      },
+      "launch_to_reply_ms": {
+        "n": 15,
+        "median": 134.67291719280183,
+        "p95": 148.61683291383088,
+        "min": 127.52362503670156,
+        "max": 148.61683291383088
+      },
+      "peak_rss_bytes": {
+        "n": 15,
+        "median": 93945856,
+        "p95": 94650368,
+        "min": 89407488,
+        "max": 94650368
+      },
+      "warm": {
+        "0": {
+          "n": 30,
+          "median": 0.7243535947054625,
+          "p95": 1.3285421300679445,
+          "min": 0.5658329464495182,
+          "max": 1.582917058840394
+        },
+        "200": {
+          "n": 30,
+          "median": 207.05870806705207,
+          "p95": 209.9498340394348,
+          "min": 203.74095905572176,
+          "max": 211.08504105359316
+        }
+      },
+      "advertised_tools": 13,
+      "request_bytes": {
+        "n": 15,
+        "median": 10415,
+        "p95": 10416,
+        "min": 10415,
+        "max": 10416
+      },
+      "model_calls": {
+        "n": 15,
+        "median": 1,
+        "p95": 1,
+        "min": 1,
+        "max": 1
+      },
+      "warm_model_calls": {
+        "0": {
+          "n": 30,
+          "median": 1.0,
+          "p95": 1,
+          "min": 1,
+          "max": 1
+        },
+        "200": {
+          "n": 30,
+          "median": 1.0,
+          "p95": 1,
+          "min": 1,
+          "max": 1
+        }
+      }
+    },
+    "openhuman": {
+      "ready_ms": {
+        "n": 15,
+        "median": 467.19808387570083,
+        "p95": 489.1602077987045,
+        "min": 452.8211250435561,
+        "max": 489.1602077987045
+      },
+      "first_turn_ms": {
+        "n": 15,
+        "median": 474.11933285184205,
+        "p95": 486.7356668692082,
+        "min": 468.0891251191497,
+        "max": 486.7356668692082
+      },
+      "launch_to_reply_ms": {
+        "n": 15,
+        "median": 939.0311250463128,
+        "p95": 974.2699170019478,
+        "min": 928.4167499281466,
+        "max": 974.2699170019478
+      },
+      "peak_rss_bytes": {
+        "n": 15,
+        "median": 92389376,
+        "p95": 95567872,
+        "min": 88932352,
+        "max": 95567872
+      },
+      "warm": {
+        "0": {
+          "n": 30,
+          "median": 41.736583574675024,
+          "p95": 52.884416887536645,
+          "min": 32.683291006833315,
+          "max": 53.09187504462898
+        },
+        "200": {
+          "n": 30,
+          "median": 452.8683749958873,
+          "p95": 458.66341702640057,
+          "min": 444.9660829268396,
+          "max": 466.7985828127712
+        }
+      },
+      "advertised_tools": 0,
+      "request_bytes": {
+        "n": 15,
+        "median": 43837,
+        "p95": 44859,
+        "min": 42815,
+        "max": 44859
+      },
+      "model_calls": {
+        "n": 15,
+        "median": 2,
+        "p95": 2,
+        "min": 2,
+        "max": 2
+      },
+      "warm_model_calls": {
+        "0": {
+          "n": 30,
+          "median": 2.0,
+          "p95": 2,
+          "min": 2,
+          "max": 2
+        },
+        "200": {
+          "n": 30,
+          "median": 2.0,
+          "p95": 2,
+          "min": 2,
+          "max": 2
+        }
+      }
+    }
+  },
+  "samples": [
+    {
+      "engine": "runrail",
+      "index": 0,
+      "delay_ms": 0,
+      "ready_ms": 127.50154105015099,
+      "first_turn_ms": 8.077041944488883,
+      "launch_to_reply_ms": 135.58025006204844,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 93192192
+    },
+    {
+      "engine": "openhuman",
+      "index": 0,
+      "delay_ms": 0,
+      "ready_ms": 455.7138339150697,
+      "first_turn_ms": 472.70120796747506,
+      "launch_to_reply_ms": 928.4167499281466,
+      "request_bytes": 42815,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 15782,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 88932352
+    },
+    {
+      "engine": "openhuman",
+      "index": 1,
+      "delay_ms": 0,
+      "ready_ms": 457.324167015031,
+      "first_turn_ms": 472.62799995951355,
+      "launch_to_reply_ms": 929.9542920198292,
+      "request_bytes": 42961,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 15928,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 92389376
+    },
+    {
+      "engine": "runrail",
+      "index": 1,
+      "delay_ms": 0,
+      "ready_ms": 129.7694998793304,
+      "first_turn_ms": 8.088166825473309,
+      "launch_to_reply_ms": 137.85916683264077,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 92962816
+    },
+    {
+      "engine": "runrail",
+      "index": 2,
+      "delay_ms": 0,
+      "ready_ms": 122.94350005686283,
+      "first_turn_ms": 7.678832858800888,
+      "launch_to_reply_ms": 130.62395807355642,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94355456
+    },
+    {
+      "engine": "openhuman",
+      "index": 2,
+      "delay_ms": 0,
+      "ready_ms": 477.6062921155244,
+      "first_turn_ms": 475.6288749631494,
+      "launch_to_reply_ms": 953.2371249515563,
+      "request_bytes": 43107,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16074,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 92995584
+    },
+    {
+      "engine": "openhuman",
+      "index": 3,
+      "delay_ms": 0,
+      "ready_ms": 467.19808387570083,
+      "first_turn_ms": 474.11933285184205,
+      "launch_to_reply_ms": 941.3189168553799,
+      "request_bytes": 43253,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16220,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 94961664
+    },
+    {
+      "engine": "runrail",
+      "index": 3,
+      "delay_ms": 0,
+      "ready_ms": 124.23766683787107,
+      "first_turn_ms": 8.922040928155184,
+      "launch_to_reply_ms": 133.16133292391896,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 93503488
+    },
+    {
+      "engine": "runrail",
+      "index": 4,
+      "delay_ms": 0,
+      "ready_ms": 120.11358398012817,
+      "first_turn_ms": 7.408249890431762,
+      "launch_to_reply_ms": 127.52362503670156,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94355456
+    },
+    {
+      "engine": "openhuman",
+      "index": 4,
+      "delay_ms": 0,
+      "ready_ms": 464.2340410500765,
+      "first_turn_ms": 472.79824991710484,
+      "launch_to_reply_ms": 937.0342080947012,
+      "request_bytes": 43399,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16366,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 91111424
+    },
+    {
+      "engine": "openhuman",
+      "index": 5,
+      "delay_ms": 0,
+      "ready_ms": 487.5328750349581,
+      "first_turn_ms": 486.7356668692082,
+      "launch_to_reply_ms": 974.2699170019478,
+      "request_bytes": 43545,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16512,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 93011968
+    },
+    {
+      "engine": "runrail",
+      "index": 5,
+      "delay_ms": 0,
+      "ready_ms": 138.59408302232623,
+      "first_turn_ms": 8.278292138129473,
+      "launch_to_reply_ms": 146.87383314594626,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 90849280
+    },
+    {
+      "engine": "runrail",
+      "index": 6,
+      "delay_ms": 0,
+      "ready_ms": 129.49858396314085,
+      "first_turn_ms": 8.14254186116159,
+      "launch_to_reply_ms": 137.64283386990428,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 89407488
+    },
+    {
+      "engine": "openhuman",
+      "index": 6,
+      "delay_ms": 0,
+      "ready_ms": 489.1602077987045,
+      "first_turn_ms": 474.20166595838964,
+      "launch_to_reply_ms": 963.3636658545583,
+      "request_bytes": 43691,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16658,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 95092736
+    },
+    {
+      "engine": "openhuman",
+      "index": 7,
+      "delay_ms": 0,
+      "ready_ms": 473.10154186561704,
+      "first_turn_ms": 473.5305830836296,
+      "launch_to_reply_ms": 946.6345829423517,
+      "request_bytes": 43837,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16804,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 95567872
+    },
+    {
+      "engine": "runrail",
+      "index": 7,
+      "delay_ms": 0,
+      "ready_ms": 125.85758417844772,
+      "first_turn_ms": 8.81387502886355,
+      "launch_to_reply_ms": 134.67291719280183,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 92422144
+    },
+    {
+      "engine": "runrail",
+      "index": 8,
+      "delay_ms": 0,
+      "ready_ms": 122.3132919985801,
+      "first_turn_ms": 8.908458054065704,
+      "launch_to_reply_ms": 131.22700015082955,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 93323264
+    },
+    {
+      "engine": "openhuman",
+      "index": 8,
+      "delay_ms": 0,
+      "ready_ms": 452.8211250435561,
+      "first_turn_ms": 475.604958133772,
+      "launch_to_reply_ms": 928.4282501321286,
+      "request_bytes": 43983,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 16950,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 90800128
+    },
+    {
+      "engine": "openhuman",
+      "index": 9,
+      "delay_ms": 0,
+      "ready_ms": 459.36041697859764,
+      "first_turn_ms": 474.98645912855864,
+      "launch_to_reply_ms": 934.3483340926468,
+      "request_bytes": 44129,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17096,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 91013120
+    },
+    {
+      "engine": "runrail",
+      "index": 9,
+      "delay_ms": 0,
+      "ready_ms": 123.92379203811288,
+      "first_turn_ms": 8.65133386105299,
+      "launch_to_reply_ms": 132.57654197514057,
+      "request_bytes": 10415,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10415,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94650368
+    },
+    {
+      "engine": "runrail",
+      "index": 10,
+      "delay_ms": 0,
+      "ready_ms": 135.75937505811453,
+      "first_turn_ms": 9.067374980077147,
+      "launch_to_reply_ms": 144.82833398506045,
+      "request_bytes": 10416,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10416,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 93945856
+    },
+    {
+      "engine": "openhuman",
+      "index": 10,
+      "delay_ms": 0,
+      "ready_ms": 469.2212080117315,
+      "first_turn_ms": 468.0891251191497,
+      "launch_to_reply_ms": 937.3119580559433,
+      "request_bytes": 44275,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17242,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 89505792
+    },
+    {
+      "engine": "openhuman",
+      "index": 11,
+      "delay_ms": 0,
+      "ready_ms": 459.24654114060104,
+      "first_turn_ms": 470.0946668162942,
+      "launch_to_reply_ms": 929.3433330021799,
+      "request_bytes": 44421,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17388,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 91373568
+    },
+    {
+      "engine": "runrail",
+      "index": 11,
+      "delay_ms": 0,
+      "ready_ms": 125.99049997515976,
+      "first_turn_ms": 9.185415925458074,
+      "launch_to_reply_ms": 135.1774160284549,
+      "request_bytes": 10416,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10416,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94011392
+    },
+    {
+      "engine": "runrail",
+      "index": 12,
+      "delay_ms": 0,
+      "ready_ms": 120.47741608694196,
+      "first_turn_ms": 7.893542060628533,
+      "launch_to_reply_ms": 128.3727081026882,
+      "request_bytes": 10416,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10416,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94208000
+    },
+    {
+      "engine": "openhuman",
+      "index": 12,
+      "delay_ms": 0,
+      "ready_ms": 463.54595804587007,
+      "first_turn_ms": 475.4831250756979,
+      "launch_to_reply_ms": 939.0311250463128,
+      "request_bytes": 44567,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17534,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 92258304
+    },
+    {
+      "engine": "openhuman",
+      "index": 13,
+      "delay_ms": 0,
+      "ready_ms": 474.9145000241697,
+      "first_turn_ms": 477.0895419642329,
+      "launch_to_reply_ms": 952.005707891658,
+      "request_bytes": 44713,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17680,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 93749248
+    },
+    {
+      "engine": "runrail",
+      "index": 13,
+      "delay_ms": 0,
+      "ready_ms": 139.88166581839323,
+      "first_turn_ms": 8.733042050153017,
+      "launch_to_reply_ms": 148.61683291383088,
+      "request_bytes": 10416,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10416,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94191616
+    },
+    {
+      "engine": "runrail",
+      "index": 14,
+      "delay_ms": 0,
+      "ready_ms": 123.42862505465746,
+      "first_turn_ms": 8.171832887455821,
+      "launch_to_reply_ms": 131.60216598771513,
+      "request_bytes": 10416,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10416,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "peak_rss_bytes": 94437376
+    },
+    {
+      "engine": "openhuman",
+      "index": 14,
+      "delay_ms": 0,
+      "ready_ms": 474.45129114203155,
+      "first_turn_ms": 472.1659170463681,
+      "launch_to_reply_ms": 946.6217500157654,
+      "request_bytes": 44859,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17826,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "peak_rss_bytes": 94748672
+    },
+    {
+      "engine": "runrail",
+      "index": 100,
+      "delay_ms": 0,
+      "ready_ms": 134.55262500792742,
+      "first_turn_ms": 8.56208405457437,
+      "launch_to_reply_ms": 143.11662502586842,
+      "request_bytes": 10417,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10417,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "warm_turn_ms": [
+        1.1258749291300774,
+        0.811540987342596,
+        0.7987909484654665,
+        0.691958935931325,
+        0.7647080346941948,
+        0.7364160846918821,
+        0.6732500623911619,
+        0.7122911047190428,
+        1.582917058840394,
+        0.9632909204810858,
+        0.8754581212997437,
+        0.9412078652530909,
+        0.871540978550911,
+        0.6663750391453505,
+        0.6530408281832933,
+        0.6470000371336937,
+        0.5821671802550554,
+        0.6733748596161604,
+        0.6903749890625477,
+        0.6297088693827391,
+        0.6027501076459885,
+        0.6401250138878822,
+        0.6322499830275774,
+        1.3285421300679445,
+        0.752749852836132,
+        0.5658329464495182,
+        0.6761250551789999,
+        0.8082080166786909,
+        0.9280408266931772,
+        0.9694998152554035
+      ],
+      "warm_model_calls": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "peak_rss_bytes": 104316928
+    },
+    {
+      "engine": "openhuman",
+      "index": 100,
+      "delay_ms": 0,
+      "ready_ms": 478.1832080334425,
+      "first_turn_ms": 492.6882078871131,
+      "launch_to_reply_ms": 970.8730829879642,
+      "request_bytes": 45005,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 17972,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "warm_turn_ms": [
+        36.757250083610415,
+        37.366250064224005,
+        39.79312512092292,
+        41.13812488503754,
+        40.14579183422029,
+        52.884416887536645,
+        41.81995801627636,
+        39.0277081169188,
+        32.683291006833315,
+        34.15850014425814,
+        34.68449995853007,
+        35.055666929110885,
+        35.926666809245944,
+        41.7521670460701,
+        46.204542042687535,
+        39.2165828961879,
+        41.628665989264846,
+        42.57424990646541,
+        53.09187504462898,
+        40.9702081233263,
+        41.72100010327995,
+        43.12404105439782,
+        46.38979188166559,
+        43.00129204057157,
+        44.15962495841086,
+        42.98279108479619,
+        45.41745805181563,
+        46.90741701051593,
+        47.837874852120876,
+        51.29229184240103
+      ],
+      "warm_model_calls": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "peak_rss_bytes": 146489344
+    },
+    {
+      "engine": "runrail",
+      "index": 300,
+      "delay_ms": 200,
+      "ready_ms": 143.59229197725654,
+      "first_turn_ms": 219.42795906215906,
+      "launch_to_reply_ms": 363.0221670027822,
+      "request_bytes": 10417,
+      "advertised_tools": 13,
+      "stream": true,
+      "success": true,
+      "model_calls": 1,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 10417,
+          "tools": 13,
+          "model": "benchmark-mock",
+          "stream": true
+        }
+      ],
+      "warm_turn_ms": [
+        204.8989161849022,
+        207.0574159733951,
+        206.3231251668185,
+        205.89075004681945,
+        206.17508399300277,
+        207.42212515324354,
+        206.38208300806582,
+        208.30845786258578,
+        207.06000016070902,
+        206.21787500567734,
+        206.88650012016296,
+        203.74095905572176,
+        205.13862487860024,
+        207.43020810186863,
+        207.1568751707673,
+        207.6983330771327,
+        204.8116670921445,
+        206.8866251502186,
+        206.5005002077669,
+        207.72500010207295,
+        211.08504105359316,
+        207.26758311502635,
+        209.9498340394348,
+        207.395208068192,
+        207.54308300092816,
+        206.55849995091558,
+        207.4151250999421,
+        208.0354169011116,
+        208.255167119205,
+        204.1333329398185
+      ],
+      "warm_model_calls": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "peak_rss_bytes": 104710144
+    },
+    {
+      "engine": "openhuman",
+      "index": 300,
+      "delay_ms": 200,
+      "ready_ms": 522.2337080631405,
+      "first_turn_ms": 902.7272500097752,
+      "launch_to_reply_ms": 1424.9623329378664,
+      "request_bytes": 50261,
+      "advertised_tools": 0,
+      "stream": false,
+      "success": true,
+      "model_calls": 2,
+      "request_metadata": [
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 23228,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        },
+        {
+          "path": "/v1/chat/completions",
+          "bytes": 27033,
+          "tools": 0,
+          "model": "benchmark-mock",
+          "stream": false
+        }
+      ],
+      "warm_turn_ms": [
+        450.95504191704094,
+        453.59970815479755,
+        456.1972920782864,
+        444.9660829268396,
+        458.1092500593513,
+        449.7337909415364,
+        450.72087505832314,
+        447.427666047588,
+        453.0256250873208,
+        456.8045830819756,
+        466.7985828127712,
+        453.83112505078316,
+        446.4537501335144,
+        445.6143749412149,
+        445.3174169175327,
+        453.38708302006125,
+        452.31337496079504,
+        451.3121659401804,
+        451.8309170380235,
+        457.2232919745147,
+        458.66341702640057,
+        453.39745795354247,
+        457.0439578965306,
+        446.43158302642405,
+        452.7613748796284,
+        445.4222919885069,
+        454.3327500578016,
+        452.97537511214614,
+        455.44508402235806,
+        452.3232080973685
+      ],
+      "warm_model_calls": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "peak_rss_bytes": 129302528
+    }
+  ],
+  "engine_scope": {
+    "runrail_typescript_src_files": 249,
+    "runrail_typescript_src_lines": 52429,
+    "scope": "Runrail src only; excludes public Nifra implementation, tests, and desktop"
+  },
+  "hardware_cpu": "Apple M3 Max",
+  "hardware_memory_bytes": 137438953472
+}

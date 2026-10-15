@@ -1,0 +1,11 @@
+{"type":"system","session_id":"fixture-claude-session"}
+{"type":"assistant","session_id":"fixture-claude-session","message":{"content":[{"type":"text","text":"fixture answer"}]}}
+{"type":"stream_event","session_id":"fixture-claude-session","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"fixture delta"}}}
+{"type":"message_start","session_id":"fixture-claude-session","message":{"usage":{"input_tokens":1}}}
+{"type":"tool_use","session_id":"fixture-claude-session","id":"fixture-call","name":"fixture_tool"}
+{"type":"user","session_id":"fixture-claude-session","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call","content":"fixture result"}]}}
+{"type":"approval.required","session_id":"fixture-claude-session","turn_id":"fixture-turn","approval_id":"fixture-approval","action":"fixture action","capability":"fixture.command"}
+{"type":"rate_limit_event","session_id":"fixture-claude-session"}
+{"type":"error","session_id":"fixture-claude-session","message":"fixture failure"}
+{"type":"result","session_id":"fixture-claude-session","subtype":"cancelled","is_error":false}
+{"type":"result","session_id":"fixture-claude-session","is_error":false}

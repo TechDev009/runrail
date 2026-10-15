@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true,"embeddedContext":true}},"agentInfo":{"name":"Copilot","version":"1.0.62"},"authMethods":[{"id":"copilot-login","name":"Log in with Copilot CLI"}]}}
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-acp-session"}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-acp-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"fixture delta"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-acp-session","update":{"sessionUpdate":"tool_call","toolCallId":"fixture-call","title":"Read fixture.txt","kind":"read","status":"pending"}}}
+{"jsonrpc":"2.0","id":"fixture-permission","method":"session/request_permission","params":{"sessionId":"fixture-acp-session","toolCall":{"toolCallId":"fixture-call","title":"Read fixture.txt","kind":"read"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture-acp-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"fixture-call","status":"completed","content":[{"type":"content","content":{"type":"text","text":"fixture result"}}]}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

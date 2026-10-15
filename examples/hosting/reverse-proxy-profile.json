@@ -1,0 +1,13 @@
+{
+  "id": "production-edge",
+  "version": "1.0.0",
+  "kind": "reverse-proxy",
+  "hostname": "runrail.example",
+  "port": 443,
+  "allowRemote": true,
+  "tls": "terminated-proxy",
+  "auth": "caller",
+  "durableState": true,
+  "sandboxId": "caller-container",
+  "maxBodyBytes": 1048576
+}

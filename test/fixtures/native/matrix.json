@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "apiVersion": "1.0",
+  "rows": [
+    { "id": "task.kernel", "owner": "engine", "surface": "Task lifecycle", "classification": "native", "api": "native.task/1", "stateModel": "task state plus replayable event journal", "authority": "workspace, approval, and idempotency policy", "fixture": "native-task-contract", "status": "verified" },
+    { "id": "coding.loop", "owner": "engine", "surface": "Coding loop", "classification": "native", "api": "native.session/1", "stateModel": "session and turn lifecycle", "authority": "workspace policy and tool approval", "fixture": "native-coding-loop", "status": "verified" },
+    { "id": "extensions.native", "owner": "engine", "surface": "Native extensions", "classification": "native", "api": "native.extension/1", "stateModel": "transactional contribution graph and UI schema", "authority": "manifest capabilities, permissions, approval, and isolation", "fixture": "native-extensions", "status": "active", "reason": "Native extension API and cross-shell rendering are still being completed." },
+    { "id": "packages.native", "owner": "engine", "surface": "Native packages", "classification": "native", "api": "native.package/1", "stateModel": "lockfile, dependency graph, integrity, and rollback", "authority": "signature, source, dependency, and activation policy", "fixture": "native-packages", "status": "active", "reason": "Native registry and dependency resolution are still being completed." },
+    { "id": "accounts.native", "owner": "engine", "surface": "Accounts and auth", "classification": "native", "api": "native.account/1", "stateModel": "account reference and credential broker state", "authority": "desktop vault or caller broker; secret values never persist", "fixture": "native-accounts", "status": "active", "reason": "Native account broker and desktop auth flows are still being completed." },
+    { "id": "sharing.local", "owner": "engine", "surface": "Local sharing", "classification": "native", "api": "native.share/1", "stateModel": "bounded export, invite, access, and revoke state", "authority": "payload opt-in, encryption, and local ownership", "fixture": "native-share-local", "status": "active", "reason": "Native share protocol and encrypted local bundles are still being completed." }
+  ]
+}

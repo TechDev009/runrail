@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # The root config covers src and test only; the maintained scripts are checked here.
+      - name: Typecheck scripts
+        run: bunx tsc --noEmit -p tsconfig.scripts.json
+
+      - name: Check publishable package metadata
+        run: bun run package:check
+      - name: Check public source boundary
+        run: bun run source:check
+
+      - name: Run tests
+        run: bun test
+
+      - name: Pack published Nifra artifacts
+        run: |
+          mkdir -p /tmp/nifra-runrail-pack
+          npm pack @nifrajs/agent-protocol@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/agent@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/agent-review@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/core@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/jobs@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/coding-agent@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/mcp@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+          npm pack @nifrajs/pi@5.3.0 --pack-destination /tmp/nifra-runrail-pack
+
+      - name: Validate packed public imports
+        run: bun run test:packed
+
+  # A version tag (v0.1.0, matching package.json and with a CHANGELOG.md section) packs the
+  # package and collects it into a draft GitHub release: nobody sees it until a maintainer
+  # publishes it. `bun add -g <the tarball's URL>` installs the CLI from it.
+  release:
+    name: Draft release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Pack the release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(bun -p "require('./package.json').version")"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match version $version in package.json"
+            exit 1
+          fi
+          awk -v v="$version" '/^## \[/ { p = index($0, "[" v "]") == 4; next } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          mkdir release
+          bun pm pack --destination release
+          (cd release && sha256sum -- * > SHA256SUMS.txt)
+
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mapfile -t files < <(find release -type f | sort)
+          if draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != "true" ]; then
+              echo "::error::$TAG is already published; its files are not replaced."
+              exit 1
+            fi
+            gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            prerelease=()
+            [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+            gh release create "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --draft "${prerelease[@]}" \
+              --title "Runrail ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi

@@ -1,0 +1,39 @@
+node_modules/
+dist/
+.tmp-*/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# Keys and certificates
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+.DS_Store
+.serena/
+# Added by code-review-graph
+.code-review-graph/
+
+# Local runtime state (tasks, events, shares)
+.runrail/
+
+# Plans and working notes stay on this machine
+.pi/
+.planning/
+/*PLAN*.md
+/NIFRA-APPROVAL-CLOSURE.md
+/*_report.md
+
+# Personal coding-agent settings (code-review-graph hooks, editor rules)
+.claude/
+.cursor/
+.kiro/
+/.mcp.json
+/.opencode.json
+/.cursorrules
+/.windsurfrules
+/CLAUDE.md
+/GEMINI.md

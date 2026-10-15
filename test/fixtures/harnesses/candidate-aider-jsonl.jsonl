@@ -1,0 +1,1 @@
+{"version":1,"sessionId":"fixture","seq":0,"at":0,"type":"session.completed","snapshot":{"version":1,"id":"fixture","backend":"aider","cwd":"/tmp","status":"completed","createdAt":0,"updatedAt":0,"lastSeq":0,"capabilities":["sessions"]}}

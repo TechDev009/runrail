@@ -1,0 +1,12 @@
+{
+  "id": "loopback",
+  "version": "1.0.0",
+  "kind": "loopback",
+  "hostname": "127.0.0.1",
+  "port": 0,
+  "allowRemote": false,
+  "tls": "none",
+  "auth": "bearer",
+  "durableState": false,
+  "maxBodyBytes": 1048576
+}
