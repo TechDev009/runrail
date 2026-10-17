@@ -101,7 +101,10 @@ An adapter only needs to implement the published Nifra `AgentBackend` contract
 and declare its capabilities. The Codex, Claude Code, Copilot, and other
 coding-tool adapters use this seam, and a remote or A2A adapter would too.
 Vendor credentials and SDKs stay outside Runrail core: the Claude Agent SDK is
-an optional peer that is fetched on first use, never shipped.
+an optional peer, never shipped. A build that downloads it registers a loader
+(`registerClaudeAgentSdkLoader`) and an installer
+(`registerClaudeAgentSdkInstaller`) that runs only when the person asks, and
+`claudeAgentSdkStatus()` says whether it is ready and how to install it.
 
 ## More native surfaces
 

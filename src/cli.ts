@@ -70,6 +70,7 @@ import { getCustomProviderPreset, getProviderPreset, isProviderFamilyId } from "
 import { timed } from "./startup-timings.ts"
 import { exportCliSession, listCliSessions, openCliSession, prepareCliSession, resolveSessionsRoot, routeArgs, routeBackend, shortId, type CliSessionPlan, type OpenCliSession } from "./sessions-cli.ts"
 import { doctorText, runDoctor } from "./doctor.ts"
+import { claudeAgentSdkStatus } from "./backend/claude-agent-sdk.ts"
 import type { TranscriptStore } from "./transcript/store.ts"
 import { terminalText } from "./workbench/terminal-text.ts"
 export type RunrailBackendName = "replay" | "native" | "pi" | "codex" | "claude-code" | "copilot" | "opencode" | "gemini" | "goose"
@@ -1381,6 +1382,16 @@ function localMinute(ms: number): string {
   return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`
 }
 
+/** A Claude Code run on its usual route, without the SDK, says what it cannot do and how to fix that. */
+function agentSdkHint(options: CliOptions): void {
+  if (options.json || options.backend !== "claude-code") return
+  // The same test createClaudeCodeBackend makes: these routes never use the SDK.
+  if (options.harnessProtocol !== undefined || options.harnessPersistent === true || (options.harnessArgs?.length ?? 0) > 0 || options.harnessCommand !== undefined) return
+  const sdk = claudeAgentSdkStatus()
+  if (sdk.ready) return
+  console.error(`Claude Code is running in print mode, so it cannot ask before it uses a tool. To fix that, install the Claude Agent SDK (Anthropic's package, under its terms: ${sdk.termsUrl}):\n  ${sdk.installCommand}\n  ${sdk.npmUrl}`)
+}
+
 /** Where a saved session can be picked up again. `--json` output already carries the id. */
 function sessionHint(saved: OpenCliSession | undefined, command: "run" | "console", json: boolean): void {
   if (saved === undefined || json) return
@@ -2175,6 +2186,8 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
         process.exitCode = status === "failed" ? 1 : 0
       } finally {
         await piExtensions?.close()
+        // After the full-screen console, where it would have been drawn over.
+        agentSdkHint(options)
         sessionHint(saved, "console", options.json)
       }
     } else if (options.command === "control") {
@@ -2335,6 +2348,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
       }
     } else {
       const saved = await openCliSession(plan, { cwd: options.cwd, backend: options.backend, route: routeArgs(plan.argv) })
+      agentSdkHint(options)
       const result = await runCliHeadless(options, saved)
       if (options.json) console.log(JSON.stringify(result, null, 2))
       else {

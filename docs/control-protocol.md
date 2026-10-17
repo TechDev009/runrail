@@ -331,6 +331,7 @@ Important control method families include:
 - `session.compact` when `session.compact` is available, and
   `session.usage.read` when `session.usage` is; `usage.read` when
   `usage.read` is
+- `claude.sdk.status` and `claude.sdk.install` when `claude.sdk` is available
 - provider, harness, plugin, connector, account, package, share, skill, and
   metrics methods when their capability is advertised
 
@@ -376,6 +377,19 @@ Notes on some of these:
   process runs the answer is `{}`. Claude Code is asked for its context in
   full and, at most once a minute, for its plan usage; Codex answers its last
   reading and its rate limits. Whatever is read is also sent as live frames.
+- `claude.sdk.status` (capability `claude.sdk`) answers whether Claude Code
+  can use the Claude Agent SDK: `{ ready, source, package, version, npmUrl,
+  termsUrl, installCommand }`. `source` is `registered`, `installed`, or
+  `downloaded` when it is ready, `installable` when this engine can download
+  it, and `missing` otherwise; without it Claude Code runs in print mode and
+  cannot ask before tools. `claude.sdk.install { confirm: true }` downloads it
+  through the installer a build registered (`registerClaudeAgentSdkInstaller`)
+  and answers the new status; only the person's own yes should send it, since
+  the SDK is Anthropic's, under its terms. With no installer it fails with
+  `CONTROL_CAPABILITY_UNAVAILABLE` naming `installCommand`, and a failed
+  download fails with `CONTROL_CLAUDE_SDK_INSTALL_FAILED` and its reason. A
+  thread engine started before the download keeps print mode until it is
+  started again.
 - `usage.read { tool, connectionId?, refresh? }` (capability `usage.read`) reads a
   coding tool's plan usage with no thread running, so a client can show it at
   start. `tool` is `claude-code` or `codex`; without `connectionId` it reads

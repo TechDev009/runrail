@@ -84,6 +84,7 @@ export const RUNRAIL_CONTROL_CAPABILITIES = [
   "session.external",
   "task.rename",
   "harness.status",
+  "claude.sdk",
   "mcp",
   "nifra",
   "connection.import",

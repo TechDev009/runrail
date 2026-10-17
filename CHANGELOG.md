@@ -4,6 +4,14 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+- A Claude Code run without the Claude Agent SDK now says so: `run` and
+  `console` print that Claude Code cannot ask before tools, with the command
+  that installs the SDK beside Runrail and its npm page, and `doctor` and
+  `HARNESS_SDK_MISSING` name the same command.
+- `claude.sdk.status` and `claude.sdk.install` control methods, and
+  `registerClaudeAgentSdkInstaller`, let a build download the SDK only after
+  the person says yes.
+
 ## [0.1.0] - 2026-10-16
 
 First public release.

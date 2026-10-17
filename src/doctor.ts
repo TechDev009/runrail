@@ -2,7 +2,7 @@ import { constants } from "node:fs"
 import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
-import { claudeAgentSdkSource } from "./backend/claude-agent-sdk.ts"
+import { CLAUDE_AGENT_SDK, claudeAgentSdkInstallCommand, claudeAgentSdkSource, type ClaudeAgentSdkSource } from "./backend/claude-agent-sdk.ts"
 import { HARNESS_PROBE_TARGETS, probeHarness, type HarnessProbe, type HarnessProbeTarget } from "./harness/detect.ts"
 import { listCliSessions } from "./sessions-cli.ts"
 import { RUNRAIL_VERSION } from "./version.ts"
@@ -31,7 +31,8 @@ export interface DoctorOptions {
   readonly bunVersion?: string
   readonly probe?: (target: HarnessProbeTarget) => Promise<HarnessProbe>
   readonly gitVersion?: (cwd?: string) => Promise<GitAnswer>
-  readonly agentSdk?: () => ReturnType<typeof claudeAgentSdkSource>
+  readonly agentSdk?: () => ClaudeAgentSdkSource
+  readonly agentSdkInstallCommand?: string
 }
 
 export interface GitAnswer {
@@ -73,9 +74,7 @@ export async function runDoctor(options: DoctorOptions): Promise<readonly Doctor
   ]
   for (const [target, found] of tools) checks.push(toolCheck(target, found))
   const claudeInstalled = tools.some(([target, found]) => target === "claude-code" && found.installed)
-  checks.push(sdk === "missing"
-    ? { name: "Claude Agent SDK", level: claudeInstalled ? "warn" : "off", detail: "the optional @anthropic-ai/claude-agent-sdk is not installed, so Claude Code runs in print mode" }
-    : { name: "Claude Agent SDK", level: "ok", detail: `${sdk === "fetched" ? "fetched from npm when first needed" : sdk}; Claude Code asks before each tool` })
+  checks.push(agentSdkCheck(sdk, claudeInstalled, options.agentSdkInstallCommand ?? claudeAgentSdkInstallCommand()))
   if (options.cwd !== undefined) {
     checks.push(gitAnswer.inRepository === true
       ? { name: "Project", level: "ok", detail: `${tilde(options.cwd)} is a git repository` }
@@ -93,6 +92,13 @@ export function doctorText(checks: readonly DoctorCheck[]): string {
   lines.push("", failed > 0 ? `${failed} problem${failed === 1 ? "" : "s"} to fix.` : warned > 0 ? `Ready, with ${warned} warning${warned === 1 ? "" : "s"}.` : "Ready.")
   lines.push("To test a saved sign-in, run: runrail auth doctor <connection>")
   return `${lines.join("\n")}\n`
+}
+
+function agentSdkCheck(sdk: ClaudeAgentSdkSource, claudeInstalled: boolean, installCommand: string): DoctorCheck {
+  const name = "Claude Agent SDK"
+  if (sdk === "missing") return { name, level: claudeInstalled ? "warn" : "off", detail: `not installed, so Claude Code runs in print mode and cannot ask before tools. Install it with: ${installCommand} (${CLAUDE_AGENT_SDK.npmUrl})` }
+  if (sdk === "installable") return { name, level: claudeInstalled ? "warn" : "off", detail: "not downloaded yet; Runrail Desktop downloads it when you allow it" }
+  return { name, level: "ok", detail: `${sdk === "fetched" ? "fetched from npm when first needed" : sdk}; Claude Code asks before each tool` }
 }
 
 function toolCheck(target: HarnessProbeTarget, found: HarnessProbe): DoctorCheck {

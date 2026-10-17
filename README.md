@@ -251,4 +251,5 @@ Runrail is free software under the [GNU Affero General Public License, version 3
 (see [NOTICE](NOTICE)). You may use, modify, and redistribute it for any purpose, including
 commercial work. If you distribute a modified version, or let others use one over a network, you
 must offer them its source under the same license. The Agent SDK is never shipped with Runrail:
-it is fetched from npm on first use, under Anthropic's own terms.
+you install it from npm yourself (Runrail says how when it is missing), or Runrail Desktop
+downloads it after you allow it, under Anthropic's own terms.

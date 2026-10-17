@@ -99,6 +99,7 @@ import {
 } from "./session/external.ts"
 import type { RunrailLiveFrame, RunrailLiveFrameInput, RunrailPlanLimitsFrame } from "./live/types.ts"
 import { claudeUsageReader, codexUsageReader, UsageReader, UsageReadError, type ToolUsageRead, type UsageTool, type UsageAccountIdentity } from "./harness/usage-read.ts"
+import { claudeAgentSdkStatus, installClaudeAgentSdk } from "./backend/claude-agent-sdk.ts"
 import { parseNativeCommand } from "./native/commands.ts"
 import { NativeContractError } from "./native/errors.ts"
 import { parseNativePackageManifest, type NativePackageManifest } from "./native/manifest.ts"
@@ -566,6 +567,7 @@ export async function startRunrailControlRpcServer(
       "session.external": controller.session.transcriptStore === undefined ? "configurable" : "available",
       "task.rename": "available",
       "harness.status": "available",
+      "claude.sdk": "available",
       nifra: "available",
       background: "available",
       browser: browserBridge === undefined ? "configurable" : "available",
@@ -1741,6 +1743,19 @@ async function dispatch(
       // A failed look is not kept: the next call asks again.
       value.catch(() => { if (services.harnesses.cached?.value === value) services.harnesses.cached = undefined })
       return value
+    }
+    case "claude.sdk.status":
+      return claudeAgentSdkStatus()
+    case "claude.sdk.install": {
+      if (params.confirm !== true) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "confirm must be true")
+      const status = claudeAgentSdkStatus()
+      if (status.ready) return status
+      if (status.source !== "installable") throw new ControlRpcError("CONTROL_CAPABILITY_UNAVAILABLE", 501, `this engine cannot download the Claude Agent SDK; install it with: ${status.installCommand}`)
+      try {
+        return await installClaudeAgentSdk()
+      } catch (error) {
+        throw new ControlRpcError("CONTROL_CLAUDE_SDK_INSTALL_FAILED", 502, error instanceof Error ? error.message.slice(0, 512) : "the download failed")
+      }
     }
     case "harness.negotiate": {
       const registry = new HarnessRegistry(createDefaultHarnessAdapters())

@@ -327,8 +327,11 @@ Useful headless controls include:
   `@anthropic-ai/claude-agent-sdk` is installed (or registered by a build
   that bundles it with `registerClaudeAgentSdk`); `--harness-protocol print`
   keeps one `claude --print` run per turn. Asking for `sdk` without the SDK
-  fails with `HARNESS_SDK_MISSING`. The SDK is Anthropic's, under its
-  Commercial Terms; Runrail does not ship it;
+  fails with `HARNESS_SDK_MISSING`, and a Claude Code run on the usual route
+  without it prints, on stderr (not with `--json`), that Claude Code cannot
+  ask before tools, with the command that installs the SDK beside this
+  Runrail and its npm page; `runrail doctor` says the same. The SDK is
+  Anthropic's, under its Commercial Terms; Runrail does not ship it;
 - with `--backend codex` or `--backend claude-code` and no `--harness-command`,
   Runrail drives the installed CLI unmodified and forwards the thread's
   settings: `--model`, `--thinking`, and the behavior file's mode, permissions,

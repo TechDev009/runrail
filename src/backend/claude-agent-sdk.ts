@@ -253,8 +253,51 @@ const SDK_PERMISSION_MODE: Readonly<Record<HarnessPermissionMode, SdkPermissionM
   bypass: "bypassPermissions",
 })
 
+/** The SDK Runrail is built against, and where a person reads about it before installing it. */
+export const CLAUDE_AGENT_SDK = Object.freeze({
+  package: SDK_PACKAGE,
+  /** Kept equal to package.json's peer range by a test. */
+  range: "^0.3.288",
+  npmUrl: "https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk",
+  termsUrl: "https://code.claude.com/docs/en/legal-and-compliance",
+})
+
+/**
+ * A build that downloads the SDK when the person asks, rather than ship it: the SDK's licence
+ * reserves all rights, so each person gets it from npm under Anthropic's own terms.
+ */
+export interface ClaudeAgentSdkInstaller {
+  /** The version it downloads. */
+  readonly version: string
+  /** Whether that version is downloaded already, found without loading it. */
+  readonly installed: () => boolean
+  readonly install: () => Promise<void>
+}
+
+/**
+ * - `registered`, `installed`, `downloaded`: ready, from a bundling build, the package beside
+ *   Runrail, or an installer's earlier download.
+ * - `fetched`: a registered loader gets it when first needed.
+ * - `installable`: missing, and `installClaudeAgentSdk` can download it.
+ * - `missing`: Claude Code runs in print mode.
+ */
+export type ClaudeAgentSdkSource = "registered" | "installed" | "downloaded" | "fetched" | "installable" | "missing"
+
+export interface ClaudeAgentSdkStatus {
+  readonly ready: boolean
+  readonly source: ClaudeAgentSdkSource
+  readonly package: string
+  /** The version an installer downloads, else the range to install. */
+  readonly version: string
+  readonly npmUrl: string
+  readonly termsUrl: string
+  /** The command that installs it beside this Runrail. */
+  readonly installCommand: string
+}
+
 let registeredSdk: ClaudeAgentSdk | undefined
 let sdkLoader: (() => Promise<unknown>) | undefined
+let sdkInstaller: ClaudeAgentSdkInstaller | undefined
 let loading: Promise<ClaudeAgentSdk | undefined> | undefined
 
 /**
@@ -276,15 +319,64 @@ export function registerClaudeAgentSdkLoader(loader: (() => Promise<unknown>) | 
   loading = undefined
 }
 
+/**
+ * Hands Runrail a way to download the SDK when the person asks, next to a loader that reads the
+ * download and never fetches. `undefined` removes it.
+ */
+export function registerClaudeAgentSdkInstaller(installer: ClaudeAgentSdkInstaller | undefined): void {
+  sdkInstaller = installer
+  loading = undefined
+}
+
 /** Where the SDK would come from, found without loading or fetching it. */
-export function claudeAgentSdkSource(): "registered" | "installed" | "fetched" | "missing" {
+export function claudeAgentSdkSource(): ClaudeAgentSdkSource {
   if (registeredSdk !== undefined) return "registered"
   try {
     Bun.resolveSync(SDK_PACKAGE, import.meta.dir)
     return "installed"
   } catch {
+    if (sdkInstaller !== undefined) return sdkInstaller.installed() ? "downloaded" : "installable"
     return sdkLoader === undefined ? "missing" : "fetched"
   }
+}
+
+export function claudeAgentSdkStatus(): ClaudeAgentSdkStatus {
+  const source = claudeAgentSdkSource()
+  return {
+    ready: source !== "installable" && source !== "missing",
+    source,
+    package: SDK_PACKAGE,
+    version: sdkInstaller?.version ?? CLAUDE_AGENT_SDK.range,
+    npmUrl: CLAUDE_AGENT_SDK.npmUrl,
+    termsUrl: CLAUDE_AGENT_SDK.termsUrl,
+    installCommand: claudeAgentSdkInstallCommand(),
+  }
+}
+
+/** Downloads the SDK through the registered installer; the person must have asked for it. */
+export async function installClaudeAgentSdk(): Promise<ClaudeAgentSdkStatus> {
+  const installer = sdkInstaller
+  if (installer === undefined) throw new Error("HARNESS_SDK_NOT_INSTALLABLE")
+  if (!installer.installed()) await installer.install()
+  loading = undefined
+  return claudeAgentSdkStatus()
+}
+
+/**
+ * The command that puts the SDK where this Runrail resolves it: the global folder for a
+ * `bun add -g` install, the project for a dependency, and node_modules alone for a checkout.
+ */
+export function claudeAgentSdkInstallCommand(runrailDir: string = import.meta.dir): string {
+  const spec = `${SDK_PACKAGE}@${CLAUDE_AGENT_SDK.range}`
+  const path = runrailDir.replaceAll("\\", "/")
+  const nodeModules = path.indexOf("/node_modules/")
+  if (nodeModules === -1) return `bun add --no-save ${spec}`
+  const project = path.slice(0, nodeModules)
+  return project.endsWith("/install/global") ? `bun add -g ${spec}` : `cd ${shellWord(project)} && bun add ${spec}`
+}
+
+function shellWord(value: string): string {
+  return /^[\w./~-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`
 }
 
 /** The registered SDK, else the registered loader's, else the installed optional peer, else undefined. */

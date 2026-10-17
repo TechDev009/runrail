@@ -65,3 +65,11 @@ test("without git or Claude Code, git warns and the SDK is not mentioned as a pr
   expect(checks.find((check) => check.name === "git")?.level).toBe("warn")
   expect(checks.find((check) => check.name === "Claude Agent SDK")?.level).toBe("off")
 })
+
+test("a missing SDK says how to install it; one the desktop has not downloaded yet says it waits for a yes", async () => {
+  const missing = (await runDoctor(options({ agentSdkInstallCommand: "bun add -g @anthropic-ai/claude-agent-sdk@^0.3.288" }))).find((check) => check.name === "Claude Agent SDK")
+  expect(missing?.detail).toContain("cannot ask before tools. Install it with: bun add -g @anthropic-ai/claude-agent-sdk@^0.3.288 (https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)")
+  const waiting = (await runDoctor(options({ agentSdk: () => "installable" }))).find((check) => check.name === "Claude Agent SDK")
+  expect(waiting).toEqual({ name: "Claude Agent SDK", level: "warn", detail: "not downloaded yet; Runrail Desktop downloads it when you allow it" })
+  expect((await runDoctor(options({ agentSdk: () => "downloaded" }))).find((check) => check.name === "Claude Agent SDK")?.level).toBe("ok")
+})

@@ -5,13 +5,17 @@ import { join } from "node:path"
 import { isAgentEvent, type AgentEvent } from "@nifrajs/agent-protocol"
 import { APPROVAL_NEVER_EXPIRES_AT } from "@nifrajs/coding-agent"
 import {
+  CLAUDE_AGENT_SDK,
   ClaudeAgentSdkBackend,
+  claudeAgentSdkStatus,
   createDefaultBackendRegistry,
   createRunrailSession,
   createFileVendorSessionStore,
+  installClaudeAgentSdk,
   loadClaudeAgentSdk,
   parseClaudeAgentSdk,
   registerClaudeAgentSdk,
+  registerClaudeAgentSdkInstaller,
   registerClaudeAgentSdkLoader,
   type ClaudeAgentSdk,
   type ClaudeAgentSdkBackendOptions,
@@ -24,6 +28,7 @@ import {
   type RunrailLiveFrameInput,
 } from "../../src/index.ts"
 import { FileTranscriptStore } from "../../src/transcript/store.ts"
+import { claudeAgentSdkInstallCommand } from "../../src/backend/claude-agent-sdk.ts"
 
 type TurnHandler = (text: string, query: FakeQuery) => Promise<void>
 
@@ -206,6 +211,7 @@ function own(events: readonly AgentEvent[], type: string): Record<string, unknow
 afterEach(() => {
   registerClaudeAgentSdk(undefined)
   registerClaudeAgentSdkLoader(undefined)
+  registerClaudeAgentSdkInstaller(undefined)
 })
 
 describe("Claude Agent SDK backend", () => {
@@ -1462,6 +1468,39 @@ describe("Claude Agent SDK backend", () => {
     expect(typeof loaded?.query).toBe("function")
     expect(await loadClaudeAgentSdk()).toBe(loaded)
     expect(calls).toBe(3)
+  })
+
+  test("an installer leaves the SDK missing until it is asked to download it, and the loader then finds it", async () => {
+    const { sdk } = fakeSdk(async () => {})
+    let downloaded = false
+    let installs = 0
+    registerClaudeAgentSdkLoader(async () => (downloaded ? sdk : undefined))
+    registerClaudeAgentSdkInstaller({ version: "0.3.288", installed: () => downloaded, install: async () => { installs += 1; downloaded = true } })
+    expect(claudeAgentSdkStatus()).toMatchObject({ ready: false, source: "installable", package: "@anthropic-ai/claude-agent-sdk", version: "0.3.288", npmUrl: CLAUDE_AGENT_SDK.npmUrl, termsUrl: CLAUDE_AGENT_SDK.termsUrl })
+    expect(await loadClaudeAgentSdk()).toBeUndefined()
+    expect(installs).toBe(0)
+    expect(await installClaudeAgentSdk()).toMatchObject({ ready: true, source: "downloaded" })
+    expect(typeof (await loadClaudeAgentSdk())?.query).toBe("function")
+    await installClaudeAgentSdk()
+    expect(installs).toBe(1)
+  })
+
+  test("without an installer the SDK cannot be downloaded, and asking for the SDK route says how to install it", async () => {
+    await expect(installClaudeAgentSdk()).rejects.toThrow("HARNESS_SDK_NOT_INSTALLABLE")
+    expect(claudeAgentSdkStatus()).toMatchObject({ ready: false, source: "missing", version: CLAUDE_AGENT_SDK.range })
+    const adapter = createDefaultBackendRegistry().select({ preferred: "claude-code", requiredCapabilities: [] })
+    await expect(Promise.resolve(adapter.create({ cwd: "/tmp", requestedCapabilities: [], options: { harnessProtocol: "sdk" } }))).rejects.toThrow(`bun add --no-save @anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK.range}`)
+  })
+
+  test("the install command puts the SDK where this Runrail resolves it, at the range package.json names", async () => {
+    const manifest = await Bun.file(join(import.meta.dir, "../../package.json")).json() as { readonly peerDependencies: Record<string, string> }
+    expect(manifest.peerDependencies["@anthropic-ai/claude-agent-sdk"]).toBe(CLAUDE_AGENT_SDK.range)
+    const spec = `@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK.range}`
+    expect(claudeAgentSdkInstallCommand("/Users/me/.bun/install/global/node_modules/runrail/src/backend")).toBe(`bun add -g ${spec}`)
+    expect(claudeAgentSdkInstallCommand("C:\\Users\\me\\.bun\\install\\global\\node_modules\\runrail\\src\\backend")).toBe(`bun add -g ${spec}`)
+    expect(claudeAgentSdkInstallCommand("/work/app/node_modules/runrail/src/backend")).toBe(`cd /work/app && bun add ${spec}`)
+    expect(claudeAgentSdkInstallCommand("/work/it's mine/node_modules/runrail/src/backend")).toBe(`cd '/work/it'\\''s mine' && bun add ${spec}`)
+    expect(claudeAgentSdkInstallCommand("/src/runrail/src/backend")).toBe(`bun add --no-save ${spec}`)
   })
 
   test("the Claude Code route picks the SDK when one is registered and refuses sdk without it", async () => {
