@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { mkdir, readdir, stat } from "node:fs/promises"
 import { basename, dirname, join, resolve } from "node:path"
 import { runGit } from "./git/run.ts"
+import { ISOLATED_BUN_FLAGS } from "./isolated-bun.ts"
 import { filteredEnvironment } from "./workspace/policy.ts"
 
 export type StarterId = "nifra" | "vite" | "next" | "empty"
@@ -111,7 +112,9 @@ export async function createStarterApp(options: StarterCreateOptions): Promise<S
   const bun = options.bun ?? process.execPath
   options.onStep?.("create", starter)
   if (starter.creator === undefined) await mkdir(path, { recursive: true })
-  else await run([bun, "x", "--bun", starter.creator, ...CREATOR_ARGS[starter.id as Exclude<StarterId, "empty">](name)], parent, CREATE_TIMEOUT_MS, "STARTER_CREATE_FAILED", options.signal)
+  // `bun x` takes no Bun flags, but the creator's Bun reads them from BUN_OPTIONS. Without them the
+  // parent folder's bunfig.toml and .env would load, even into a compiled Runrail acting as Bun.
+  else await run([bun, "x", "--bun", starter.creator, ...CREATOR_ARGS[starter.id as Exclude<StarterId, "empty">](name)], parent, CREATE_TIMEOUT_MS, "STARTER_CREATE_FAILED", options.signal, { BUN_OPTIONS: ISOLATED_BUN_FLAGS.join(" ") })
   let installed = false
   if (starter.creator !== undefined && options.install !== false) {
     options.onStep?.("install", starter)
@@ -137,7 +140,7 @@ async function firstCommit(path: string, starter: RunrailStarter, warnings: stri
   return false
 }
 
-async function run(argv: readonly string[], cwd: string, timeoutMs: number, failure: StarterErrorCode, signal: AbortSignal | undefined): Promise<void> {
+async function run(argv: readonly string[], cwd: string, timeoutMs: number, failure: StarterErrorCode, signal: AbortSignal | undefined, extraEnv: Readonly<Record<string, string>> = {}): Promise<void> {
   if (signal?.aborted === true) throw new StarterError("STARTER_CANCELLED", "creating the app was cancelled")
   const env: Record<string, string> = {
     ...filteredEnvironment(),
@@ -146,6 +149,7 @@ async function run(argv: readonly string[], cwd: string, timeoutMs: number, fail
     BUN_BE_BUN: "1",
     // Next.js would otherwise send usage telemetry to Vercel.
     NEXT_TELEMETRY_DISABLED: "1",
+    ...extraEnv,
   }
   const child = Bun.spawn([...argv], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   let ended: "timeout" | "cancelled" | undefined

@@ -58,6 +58,7 @@ try {
   const checkOutput = readProcessOutput(check)
   const checkStatus = await check.exited
   if (checkStatus !== 0) throw new Error(await checkOutput)
+  await checkFolderIsolation(join(consumer, "node_modules", ".bin", "runrail"))
   console.log("packed consumer passed (Runrail plus " + Object.keys(tarballs).length + " Nifra packages)")
 } finally {
   await rm(consumer, { recursive: true, force: true })
@@ -127,6 +128,34 @@ async function writeCheck(consumer: string): Promise<void> {
       'console.log("packed external adapter passed")',
     ].join("\n"),
   )
+}
+
+/**
+ * Runs the installed command in a folder like a freshly cloned repository, whose bunfig.toml
+ * preload and .env would show if they loaded into Runrail.
+ */
+async function checkFolderIsolation(runrail: string): Promise<void> {
+  const project = await mkdtemp(join("/tmp", "runrail-packed-project-"))
+  try {
+    const mark = join(project, "preloaded")
+    await writeFile(join(project, "bunfig.toml"), 'preload = ["./preload.ts"]\n')
+    await writeFile(join(project, "preload.ts"), 'import { writeFileSync } from "node:fs"\nwriteFileSync(' + JSON.stringify(mark) + ', "")\n')
+    await writeFile(join(project, ".env"), "RUNRAIL_AGENT_SDK_DIR=" + join(project, "from-dotenv") + "\n")
+    const { RUNRAIL_AGENT_SDK_DIR: _ignored, ...inherited } = process.env
+    const sdk = Bun.spawn([runrail, "sdk", "status", "--json"], {
+      cwd: project,
+      env: { ...inherited, HOME: project },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, status] = await Promise.all([new Response(sdk.stdout).text(), new Response(sdk.stderr).text(), sdk.exited])
+    if (status !== 0) throw new Error("installed runrail failed:\n" + stderr)
+    if (await Bun.file(mark).exists()) throw new Error("installed runrail ran the folder's bunfig.toml preload")
+    const directory = (JSON.parse(stdout) as { directory?: unknown }).directory
+    if (directory !== join(project, ".runrail", "agent-sdk")) throw new Error("installed runrail loaded the folder's .env: " + JSON.stringify(directory))
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
 }
 
 async function readProcessOutput(process: Bun.Subprocess): Promise<string> {

@@ -43,6 +43,13 @@ The absence of a sandbox is documented behavior, not a vulnerability in itself.
 
 ## Operational boundaries
 
+- Runrail never loads the `.env` files or `bunfig.toml` of the folder it starts
+  in; a `bunfig.toml` `preload` would run that folder's code inside Runrail.
+  The release executables are built without that loading, and the npm or Bun
+  install starts Bun with flags that skip both, as do the copies Claude Code
+  starts as MCP servers and the creator `runrail new` runs. Under Bun the
+  user's own `~/.bunfig.toml` still loads. On Windows, where Bun has no
+  `/dev/null` to name instead, those Bun processes skip only the `.env` files.
 - `runrail pi` is a transparent Pi process. Pi's own provider credentials,
   extensions, tools, and subprocess behavior remain in force; Runrail's native
   workspace policy does not wrap that process.

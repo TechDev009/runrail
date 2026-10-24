@@ -25,6 +25,11 @@ All notable changes to Runrail will be documented here.
 - The executables never load a `.env` or `bunfig.toml` from the folder they
   start in: a project's `bunfig.toml` can name a `preload` script, which would
   run inside Runrail.
+- Neither does `runrail` installed with npm or Bun: its command starts Bun
+  through `/bin/sh` with `--env-file=/dev/null --config=/dev/null`.
+  The Runrail that Claude Code starts again as an MCP server, and the creator
+  `runrail new` runs, get the same flags. That command needs a POSIX `sh`, so on
+  Windows install from the release's zip.
 
 ## [0.1.1] - 2026-10-24
 

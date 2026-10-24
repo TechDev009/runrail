@@ -2,6 +2,7 @@ import { chmod, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomBytes } from "node:crypto"
+import { ISOLATED_BUN_FLAGS } from "../isolated-bun.ts"
 import { RUNRAIL_VERSION } from "../version.ts"
 
 /**
@@ -26,10 +27,13 @@ export interface McpEndpoint {
   remove(): Promise<void>
 }
 
-/** How to start this program again: a compiled binary runs itself, a script runs through Bun. */
+/**
+ * How to start this program again: a compiled binary runs itself, a script runs through Bun. The
+ * caller starts it in the project folder, whose bunfig.toml and .env must not load.
+ */
 export function selfCommand(): readonly string[] {
   const main = Bun.main
-  return main.startsWith("/$bunfs/") || main.includes("~BUN") ? [process.execPath] : [process.execPath, main]
+  return main.startsWith("/$bunfs/") || main.includes("~BUN") ? [process.execPath] : [process.execPath, ...ISOLATED_BUN_FLAGS, main]
 }
 
 export async function createMcpEndpoint(command: readonly string[], server: { readonly name: string; readonly subcommand: string; readonly label: string }): Promise<McpEndpoint> {

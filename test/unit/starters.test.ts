@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { ISOLATED_BUN_FLAGS } from "../../src/isolated-bun.ts"
 import { createStarterApp, DEFAULT_STARTER, parseNewCliArgs, RUNRAIL_STARTERS, runNewCli, StarterError } from "../../src/starters.ts"
 
 const folders: string[] = []
@@ -14,12 +15,12 @@ async function scratch(): Promise<string> {
   return root
 }
 
-/** A stand-in for Bun: `x --bun <creator> <name> ...` makes the app folder, `install` leaves a mark. */
+/** A stand-in for Bun: `x --bun <creator> <name> ...` makes the app folder, `install` leaves a mark; each call records its BUN_OPTIONS. */
 async function fakeBun(root: string, exitCode = 0): Promise<string> {
   const path = join(root, "fake-bun")
   await writeFile(path, [
     "#!/bin/sh",
-    `echo "$@" >> '${join(root, "calls")}'`,
+    `echo "[$BUN_OPTIONS] $@" >> '${join(root, "calls")}'`,
     `if [ "$1" = x ]; then mkdir -p "$4" && echo '{"name":"'"$4"'"}' > "$4/package.json"; fi`,
     `if [ "$1" = install ]; then : > installed; fi`,
     `[ ${exitCode} -eq 0 ] || echo "creator broke" >&2`,
@@ -50,14 +51,14 @@ describe("starters", () => {
     else expect(result.warnings.length).toBe(1)
   })
 
-  test("a starter runs its pinned creator from the parent folder, then installs in the app", async () => {
+  test("a starter runs its pinned creator from the parent folder without that folder's Bun config, then installs in the app", async () => {
     const root = await scratch()
     const bun = await fakeBun(root)
     const steps: string[] = []
     const result = await createStarterApp({ directory: join(root, "shop"), starter: "vite", bun, onStep: (step) => steps.push(step) })
     expect(result).toMatchObject({ starter: "vite", installed: true })
     expect(steps).toEqual(["create", "install", "commit"])
-    expect((await readFile(join(root, "calls"), "utf8")).trim().split("\n")).toEqual(["x --bun create-vite@9.2.1 shop --template react-ts --no-interactive --no-immediate", "install"])
+    expect((await readFile(join(root, "calls"), "utf8")).trim().split("\n")).toEqual([`[${ISOLATED_BUN_FLAGS.join(" ")}] x --bun create-vite@9.2.1 shop --template react-ts --no-interactive --no-immediate`, "[] install"])
   })
 
   test("a creator that fails is reported with the end of its output", async () => {

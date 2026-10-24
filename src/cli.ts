@@ -1,4 +1,8 @@
-#!/usr/bin/env bun
+#!/bin/sh
+// 2>/dev/null; exec bun --env-file=/dev/null --config=/dev/null "$0" "$@"
+// Run as a program, sh reads the line above and starts this file under Bun with ISOLATED_BUN_FLAGS,
+// so the current folder's bunfig.toml (whose `preload` would run its code here) and .env never load.
+// Plain sh, because BusyBox's env has no -S.
 import { createHash } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
 import { writeFile } from "node:fs/promises"

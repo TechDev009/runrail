@@ -33,6 +33,14 @@ durable work tracker.
 - `runrail new` fetches the chosen creator from npm at a pinned version and runs
   it, then installs the app's packages: the same trust as running that creator
   yourself. It runs with the filtered environment plus proxy settings.
+- The folder Runrail starts in does not configure it: its `.env` files and
+  `bunfig.toml` (whose `preload` would run that folder's code inside Runrail)
+  never load, in the release executables, in the npm or Bun install, in the
+  copies Claude Code starts as MCP servers, or in the creator `runrail new`
+  runs from the parent folder. A checkout run as `bun src/cli.ts` is a plain
+  Bun script and does load them; run `src/cli.ts` itself, or run it from the
+  checkout with `--cwd`. On Windows, the Bun processes Runrail starts skip only
+  the `.env` files.
 - Control RPC binds to loopback by default and requires a bearer token. Remote
   operation requires an embedding application to opt into a separate TLS and
   authentication deployment profile.

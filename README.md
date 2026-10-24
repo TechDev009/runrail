@@ -61,7 +61,7 @@ another folder or `--version <version>` for another release. Other ways to insta
 | How | Command | Needs |
 | --- | --- | --- |
 | Homebrew | `brew install TechDev009/runrail/runrail` | |
-| npm or Bun | `npm install -g runrail` or `bun add -g runrail` | [Bun](https://bun.sh) 1.3 or newer on your PATH, which runs it |
+| npm or Bun | `npm install -g runrail` or `bun add -g runrail` | macOS or Linux, with [Bun](https://bun.sh) 1.3 or newer on your PATH, which runs it |
 | By hand | `runrail-<version>-<platform>.tar.gz` from [Releases](https://github.com/TechDev009/runrail/releases) | |
 | Windows (experimental) | `runrail-<version>-windows-x64.zip` from [Releases](https://github.com/TechDev009/runrail/releases) | |
 
