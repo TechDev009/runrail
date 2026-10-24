@@ -1,3 +1,4 @@
+import { dirname } from "node:path"
 import { filteredEnvironment } from "../workspace/policy.ts"
 import { GitError } from "./errors.ts"
 import { repositoryProgramOverrides } from "./repo-config.ts"
@@ -106,6 +107,17 @@ export async function runGit(options: GitRunOptions): Promise<GitRunResult> {
     clearTimeout(timer)
     options.signal?.removeEventListener("abort", kill)
   }
+}
+
+/**
+ * A shell command line that runs a git subcommand in another repository with `runGit`'s protections.
+ * Git starts a local-path remote's receive-pack without the caller's `-c` settings, so that
+ * repository's own programs are read and replaced here instead; with no `gitDir`, hooks still stay off.
+ */
+export async function protectedGitCommandLine(subcommand: string, runHooks: boolean, gitDir: string | undefined, gitCommand = "git"): Promise<string> {
+  const overrides = gitDir === undefined ? [] : await repositoryProgramOverrides(gitCommand, dirname(gitDir), { ...gitEnvironment(false, false, undefined), GIT_DIR: gitDir })
+  const argv = [gitCommand, ...SAFE_CONFIG, ...(runHooks ? [] : ["-c", "core.hooksPath=/dev/null"]), ...overrides, subcommand]
+  return argv.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ")
 }
 
 function gitEnvironment(signing: boolean, network: boolean, indexFile: string | undefined): Record<string, string> {

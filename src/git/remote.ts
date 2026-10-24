@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
-import { join } from "node:path"
+import { homedir } from "node:os"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { GitError } from "./errors.ts"
-import { runGit, type GitRunOptions } from "./run.ts"
+import { protectedGitCommandLine, runGit, type GitRunOptions } from "./run.ts"
 import type { GitRepository } from "./status.ts"
 
 type Runner = (options: GitRunOptions) => ReturnType<typeof runGit>
@@ -291,6 +293,49 @@ async function pushDestinations(repo: GitRepository, remote: string, run: Runner
   return urls
 }
 
+/**
+ * `--receive-pack` for a push to a repository on this computer, whose receive-pack git starts
+ * without the `-c` settings that keep that repository's hooks and programs from running.
+ */
+async function localReceivePack(repo: GitRepository, destinations: readonly string[], runHooks: boolean): Promise<readonly string[]> {
+  const local = destinations.map((url) => localRemotePath(repo.root, url))
+  const path = local[0]
+  if (local.every((entry) => entry === undefined)) return []
+  // One receive-pack serves every destination, and a remote machine's must not carry this one's settings.
+  if (local.length > 1 || path === undefined) throw new GitError("GIT_INVALID", "a remote that pushes to a folder on this computer must push only there")
+  return [`--receive-pack=${await protectedGitCommandLine("receive-pack", runHooks, await receivingGitDir(path))}`]
+}
+
+/** The folder a remote URL names when git reaches it as a local path (git's `url_is_local_not_ssh`). */
+function localRemotePath(root: string, url: string): string | undefined {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(url)) return undefined
+  if (/^file:\/\//i.test(url)) {
+    try {
+      return fileURLToPath(url)
+    } catch {
+      throw new GitError("GIT_INVALID", "the remote's file address is not on this computer")
+    }
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(url)) return undefined
+  const colon = url.indexOf(":")
+  const slash = url.indexOf("/")
+  if (colon >= 0 && (slash < 0 || colon < slash)) return undefined
+  if (url === "~" || url.startsWith("~/")) return join(homedir(), url.slice(2))
+  if (url.startsWith("~")) throw new GitError("GIT_INVALID", "a remote in another user's home folder is not pushed to")
+  return resolve(root, url)
+}
+
+/** The git directory receive-pack enters for `path`, tried in git's own order (`enter_repo`). */
+async function receivingGitDir(path: string): Promise<string | undefined> {
+  for (const suffix of ["/.git", "", ".git/.git", ".git"]) {
+    const candidate = `${path}${suffix}`
+    const found = await stat(candidate).catch(() => undefined)
+    if (found?.isFile() === true) return candidate
+    if (found?.isDirectory() === true && await stat(join(candidate, "HEAD")).then(() => true, () => false)) return candidate
+  }
+  return undefined
+}
+
 /** Last known commit of `<remote>/<branch>` from the local tracking ref, without a fetch. */
 export async function readRemoteBranch(repo: GitRepository, remote: string, branch: string, run: Runner = runGit, signal?: AbortSignal): Promise<string | undefined> {
   parseRemoteName(remote)
@@ -306,6 +351,8 @@ export async function pushGitBranch(repo: GitRepository, options: GitPushOptions
   if (preview.confirmation !== options.confirmation) throw new GitError("GIT_CONFLICT", "push preview is stale; preview the push again")
   if (!preview.newBranch && preview.ahead === 0 && !preview.setUpstream)
     return Object.freeze({ remote: preview.remote, branch: preview.branch, commit: preview.head, outcome: "up-to-date", upstreamSet: false })
+  const destinations = await pushDestinations(repo, preview.remote, run, options.signal === undefined ? {} : { signal: options.signal })
+  const receivePack = await localReceivePack(repo, destinations, options.runHooks)
   let result: Awaited<ReturnType<Runner>>
   try {
     result = await run({
@@ -313,6 +360,9 @@ export async function pushGitBranch(repo: GitRepository, options: GitPushOptions
       args: [
         "push",
         "--porcelain",
+        // A submodule's own config would run its programs; this push sends one commit and nothing else.
+        "--no-recurse-submodules",
+        ...receivePack,
         "--",
         preview.remote,
         // The confirmed commit, not the branch: a commit made since the preview is never published.
