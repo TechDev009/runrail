@@ -23,8 +23,9 @@ export async function* decodeSse(
 ): AsyncGenerator<SseEvent> {
   const maxLineBytes = bounded(options.maxLineBytes ?? 64 * 1024, 1, 4 * 1024 * 1024)
   const maxEventBytes = bounded(options.maxEventBytes ?? 256 * 1024, 1, 4 * 1024 * 1024)
-  const maxStreamBytes = bounded(options.maxStreamBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024)
-  const maxEvents = bounded(options.maxEvents ?? 4_096, 1, 65_536)
+  // The upper bounds match what a provider endpoint policy accepts, so a model stream's own limits always fit.
+  const maxStreamBytes = bounded(options.maxStreamBytes ?? 4 * 1024 * 1024, 1, 64 * 1024 * 1024)
+  const maxEvents = bounded(options.maxEvents ?? 4_096, 1, 4_194_304)
   const decoder = new TextDecoder()
   let buffer = ""
   let streamBytes = 0

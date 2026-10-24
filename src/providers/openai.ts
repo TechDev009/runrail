@@ -160,7 +160,7 @@ async function* completeOpenAI(
     headers: { ...(options.headers ?? {}), accept: "text/event-stream", "content-type": "application/json", authorization: `Bearer ${secret}` },
     body: JSON.stringify(options.protocol === "openai-responses" ? buildResponsesBody(options, request, state, attempt) : buildChatBody(options, request, state, attempt)),
     signal: request.signal,
-    retryable: false,
+    retryable: true,
   })
   // Three request fields are hints, not the turn itself: the thinking switch, the single-tool-call
   // flag, and the request for sealed reasoning items. A model or endpoint that does not know one
@@ -236,7 +236,7 @@ async function* completeOpenAI(
   // Chat ends with a finish reason or [DONE], Responses with response.completed.
   let finished = false
   const reasoningItems: ReasoningItem[] = []
-  for await (const event of decodeSse(response.body, { maxStreamBytes: client.limits.maxStreamBytes, maxEvents: Math.min(options.maxEvents ?? client.limits.maxEvents, client.limits.maxEvents), signal: request.signal })) {
+  for await (const event of decodeSse(response.body, { maxStreamBytes: client.limits.maxStreamBytes, maxEvents: client.limits.maxEvents, signal: request.signal })) {
     if (event.done) {
       finished = true
       break

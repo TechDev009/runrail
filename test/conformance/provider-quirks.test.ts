@@ -240,8 +240,9 @@ describe("provider preset quirks on the wire", () => {
       always.seen.length = 0
       expect(await failure(async () => run(await portOf(adapterFor({ provider: "groq", endpoint: always.url })), plain))).toEqual({ code: "PROVIDER_FAILED", status: 400 })
       expect(always.seen.length).toBe(1)
-      expect(await failure(async () => run(await portOf(adapterFor({ provider: "groq", endpoint: broken.url }), "high")))).toEqual({ code: "PROVIDER_FAILED", status: 500 })
-      expect(broken.seen.length).toBe(1)
+      // A server error is sent again as it was, up to the default two retries, never with fields dropped.
+      expect(await failure(async () => run(await portOf(adapterFor({ provider: "groq", endpoint: broken.url, retryDelayMs: 0 }), "high")))).toEqual({ code: "PROVIDER_FAILED", status: 500 })
+      expect(broken.seen.map((seen) => ["reasoning_effort" in seen.body, "parallel_tool_calls" in seen.body])).toEqual([[true, true], [true, true], [true, true]])
       expect(await failure(async () => run(await portOf(adapterFor({ provider: "groq", endpoint: locked.url }), "high")))).toEqual({ code: "PROVIDER_AUTH_FAILED", status: 401 })
       expect(locked.seen.length).toBe(1)
     } finally {

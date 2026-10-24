@@ -36,6 +36,16 @@ export interface ProviderHttpClient {
 /** Sent on every provider request that does not set its own. */
 export const RUNRAIL_USER_AGENT = `runrail/${RUNRAIL_VERSION}`
 
+/**
+ * A model streams about one event per token, so a long reply is ended by the byte limit, never by
+ * this count: 16 bytes is below the smallest event a provider sends.
+ */
+const DEFAULT_STREAM_EVENTS = 1_048_576
+const MAX_STREAM_EVENTS = 4_194_304
+/** The longest wait between attempts. A Retry-After past it fails the request instead of stalling the turn. */
+const MAX_RETRY_WAIT_MS = 10_000
+const QUOTA_REFUSAL = /quota|billing|credit|insufficient|exhausted|payment/
+
 export function normalizeProviderEndpoint(policy: ProviderEndpointPolicy): { readonly endpoint: URL; readonly limits: ProviderLimits } {
   if (policy === null || typeof policy !== "object" || typeof policy.baseUrl !== "string" || policy.baseUrl.length === 0 || policy.baseUrl.length > 2_048)
     throw new ProviderError("PROVIDER_INVALID", "provider endpoint policy is invalid")
@@ -64,9 +74,9 @@ export function normalizeProviderEndpoint(policy: ProviderEndpointPolicy): { rea
     maxRequestBytes: bound(policy.maxRequestBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024, "request"),
     maxResponseBytes: bound(policy.maxResponseBytes ?? 4 * 1024 * 1024, 1, 16 * 1024 * 1024, "response"),
     maxStreamBytes: bound(policy.maxStreamBytes ?? 16 * 1024 * 1024, 1, 64 * 1024 * 1024, "stream"),
-    maxEvents: bound(policy.maxEvents ?? 8_192, 1, 65_536, "events"),
+    maxEvents: bound(policy.maxEvents ?? DEFAULT_STREAM_EVENTS, 1, MAX_STREAM_EVENTS, "events"),
     maxRetries: bound(policy.maxRetries ?? 2, 0, 5, "retries"),
-    retryDelayMs: bound(policy.retryDelayMs ?? 100, 0, 10_000, "retry delay"),
+    retryDelayMs: bound(policy.retryDelayMs ?? 500, 0, MAX_RETRY_WAIT_MS, "retry delay"),
   })
   return Object.freeze({ endpoint, limits })
 }
@@ -118,7 +128,10 @@ class BoundedProviderHttpClient implements ProviderHttpClient {
     // Requests say who is asking. A caller may name its own product; nothing here borrows another one's.
     const named = Object.keys(input.headers ?? {}).some((name) => name.toLowerCase() === "user-agent")
     const headers = { ...(named ? {} : { "user-agent": RUNRAIL_USER_AGENT }), ...(input.headers ?? {}), ...(input.idempotencyKey === undefined ? {} : { "idempotency-key": input.idempotencyKey }) }
-    const retryable = input.retryable === true && !streaming
+    const retryable = input.retryable === true
+    // A stream is sent again only after a refusal status. A connection that dropped or went quiet may
+    // already be generating, and a timeout retried would triple the wait.
+    const retryFailure = retryable && !streaming
     const cancelled = (): boolean => input.signal?.aborted === true
     let attempt = 0
     for (;;) {
@@ -137,9 +150,10 @@ class BoundedProviderHttpClient implements ProviderHttpClient {
           throw new ProviderError("PROVIDER_ENDPOINT_DENIED", "provider endpoint answered with a redirect", { status: response.status })
         }
         if (retryable && isRetryStatus(response.status) && attempt < this.limits.maxRetries) {
-          await response.body?.cancel().catch(() => undefined)
+          const delay = await retryDelay(response, attempt, this.limits.retryDelayMs)
+          if (delay === undefined) throw statusError(response.status)
           attempt += 1
-          await wait(this.limits.retryDelayMs * attempt, input.signal)
+          await wait(delay, input.signal)
           continue
         }
         if (!response.ok) {
@@ -153,16 +167,16 @@ class BoundedProviderHttpClient implements ProviderHttpClient {
         if (error instanceof ProviderError) throw error
         if (cancelled()) throw new ProviderError("PROVIDER_CANCELLED", "provider request was cancelled")
         if (controller.signal.aborted) {
-          if (attempt < this.limits.maxRetries && retryable) {
+          if (attempt < this.limits.maxRetries && retryFailure) {
+            await wait(backoff(this.limits.retryDelayMs, attempt), input.signal)
             attempt += 1
-            await wait(this.limits.retryDelayMs * attempt, input.signal)
             continue
           }
           throw new ProviderError("PROVIDER_TIMEOUT", "provider request timed out")
         }
-        if (attempt < this.limits.maxRetries && retryable) {
+        if (attempt < this.limits.maxRetries && retryFailure) {
+          await wait(backoff(this.limits.retryDelayMs, attempt), input.signal)
           attempt += 1
-          await wait(this.limits.retryDelayMs * attempt, input.signal)
           continue
         }
         throw new ProviderError("PROVIDER_FAILED", "provider request failed")
@@ -331,7 +345,37 @@ function statusError(status: number): ProviderError {
 }
 
 function isRetryStatus(status: number): boolean {
-  return status === 408 || status === 425 || status === 500 || status === 502 || status === 503 || status === 504
+  return status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529
+}
+
+/**
+ * How long to wait before sending a refused request again, or undefined when another try would only
+ * fail again: a used-up quota, or a Retry-After longer than the cap. The refusal's body is released.
+ */
+async function retryDelay(response: Response, attempt: number, baseMs: number): Promise<number | undefined> {
+  if (response.status === 429) {
+    if (QUOTA_REFUSAL.test((await errorText(response)).toLowerCase())) return undefined
+  } else {
+    await response.body?.cancel().catch(() => undefined)
+  }
+  const asked = retryAfterMs(response.headers)
+  if (asked === undefined) return backoff(baseMs, attempt)
+  return asked <= MAX_RETRY_WAIT_MS ? asked : undefined
+}
+
+function backoff(baseMs: number, attempt: number): number {
+  return Math.min(baseMs * 2 ** attempt, MAX_RETRY_WAIT_MS)
+}
+
+/** `retry-after-ms`, or `retry-after` as seconds or an HTTP date. */
+function retryAfterMs(headers: Headers): number | undefined {
+  const ms = headers.get("retry-after-ms")?.trim()
+  if (ms !== undefined && /^\d{1,9}(?:\.\d{1,6})?$/.test(ms)) return Math.ceil(Number(ms))
+  const value = headers.get("retry-after")?.trim()
+  if (value === undefined || value.length === 0) return undefined
+  if (/^\d{1,9}(?:\.\d{1,6})?$/.test(value)) return Math.ceil(Number(value) * 1_000)
+  const at = Date.parse(value)
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now())
 }
 
 async function wait(delayMs: number, signal?: AbortSignal): Promise<void> {

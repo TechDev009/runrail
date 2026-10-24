@@ -115,6 +115,91 @@ describe("provider HTTP transport", () => {
     }
   })
 
+  test("a model stream refused with a passing status is sent again before any of its body is read", async () => {
+    const statuses = [529, 503]
+    let attempts = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        attempts += 1
+        const status = statuses.shift()
+        return status === undefined ? new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } }) : new Response("overloaded", { status })
+      },
+    })
+    try {
+      const client = createProviderHttpClient({ baseUrl: server.url.toString(), maxRetries: 2, retryDelayMs: 0 })
+      const response = await client.stream({ path: "/x", method: "POST", body: "{}", retryable: true })
+      let text = ""
+      for await (const chunk of response.body) text += new TextDecoder().decode(chunk)
+      expect(text).toBe("data: {}\n\n")
+      expect(attempts).toBe(3)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("a rate limit waits as long as Retry-After asks, and one asking past the cap is not sent again", async () => {
+    let reply = (): Response => new Response("slow down", { status: 429, headers: { "retry-after-ms": "120" } })
+    let attempts = 0
+    const server = Bun.serve({ port: 0, fetch: () => { attempts += 1; const answer = reply(); reply = () => Response.json({ ok: true }); return answer } })
+    try {
+      const client = createProviderHttpClient({ baseUrl: server.url.toString(), maxRetries: 1, retryDelayMs: 0 })
+      const started = performance.now()
+      await expect(client.stream({ path: "/x", method: "POST", body: "{}", retryable: true })).resolves.toMatchObject({ status: 200 })
+      expect(performance.now() - started).toBeGreaterThanOrEqual(110)
+      expect(attempts).toBe(2)
+      attempts = 0
+      reply = () => new Response("slow down", { status: 429, headers: { "retry-after": "120" } })
+      await expect(client.stream({ path: "/x", method: "POST", body: "{}", retryable: true })).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED", status: 429 })
+      expect(attempts).toBe(1)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("a refusal is not sent again past maxRetries, nor once the caller cancels the wait", async () => {
+    let attempts = 0
+    const server = Bun.serve({ port: 0, fetch: () => { attempts += 1; return new Response("down", { status: 503 }) } })
+    try {
+      const none = createProviderHttpClient({ baseUrl: server.url.toString(), maxRetries: 0, retryDelayMs: 0 })
+      await expect(none.stream({ path: "/x", method: "POST", body: "{}", retryable: true })).rejects.toMatchObject({ code: "PROVIDER_FAILED", status: 503 })
+      expect(attempts).toBe(1)
+      attempts = 0
+      const slow = createProviderHttpClient({ baseUrl: server.url.toString(), maxRetries: 5, retryDelayMs: 10_000 })
+      const controller = new AbortController()
+      const started = performance.now()
+      const request = slow.stream({ path: "/x", method: "POST", body: "{}", retryable: true, signal: controller.signal })
+      setTimeout(() => controller.abort(), 50)
+      await expect(request).rejects.toMatchObject({ code: "PROVIDER_CANCELLED" })
+      expect(performance.now() - started).toBeLessThan(5_000)
+      expect(attempts).toBe(1)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("a stream that fails after its body started is never sent again", async () => {
+    let attempts = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        attempts += 1
+        return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: {}\n\n")) } }), { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    try {
+      const client = createProviderHttpClient({ baseUrl: server.url.toString(), maxRetries: 2, retryDelayMs: 0 })
+      const response = await client.stream({ path: "/x", method: "POST", body: "{}", retryable: true })
+      const read = async () => {
+        for await (const _chunk of response.body) void server.stop(true)
+      }
+      await expect(read()).rejects.toBeDefined()
+      expect(attempts).toBe(1)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("a stream the consumer leaves early is cancelled, not left downloading", async () => {
     let cancelled = false
     const server = Bun.serve({

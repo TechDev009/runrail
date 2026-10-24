@@ -94,7 +94,7 @@ async function* completeAnthropic(client: ProviderHttpClient, resolver: { resolv
   try { secret = await resolver.resolve(options.credential) } catch { throw new ProviderError("PROVIDER_CREDENTIALS", "provider credential is unavailable") }
   if (typeof secret !== "string" || secret.length === 0 || secret.length > 16 * 1024) throw new ProviderError("PROVIDER_CREDENTIALS", "provider credential is invalid")
   const headers = { ...(options.headers ?? {}), "anthropic-version": "2023-06-01", accept: "text/event-stream", "content-type": "application/json", ...(state.bearer ? { authorization: `Bearer ${secret}` } : { "x-api-key": secret }) }
-  const send = (attempt: AnthropicAttempt) => client.stream({ path: "/messages", method: "POST", headers, body: JSON.stringify(buildAnthropicBody(options, request, state, attempt)), signal: request.signal, retryable: false })
+  const send = (attempt: AnthropicAttempt) => client.stream({ path: "/messages", method: "POST", headers, body: JSON.stringify(buildAnthropicBody(options, request, state, attempt)), signal: request.signal, retryable: true })
   // Two things in a request were chosen by nobody: the default answer cap and the cache markers. An
   // older or smaller model refuses a cap above its own limit, and a compatible endpoint may refuse
   // the markers; both answer 400. The turn goes out again without the one, then the other, and what
@@ -152,7 +152,7 @@ async function* completeAnthropic(client: ProviderHttpClient, resolver: { resolv
   let stopReason: string | undefined
   // A message ends with message_stop; a stream that stops before it was cut off.
   let stopped = false
-  for await (const event of decodeSse(response.body, { maxEvents: options.maxEvents ?? 8_192, maxStreamBytes: options.maxStreamBytes ?? 16 * 1024 * 1024, signal: request.signal })) {
+  for await (const event of decodeSse(response.body, { maxEvents: client.limits.maxEvents, maxStreamBytes: client.limits.maxStreamBytes, signal: request.signal })) {
     if (event.done) break
     let value: unknown
     try { value = JSON.parse(event.data) as unknown } catch { throw new ProviderError("PROVIDER_RESPONSE_INVALID", "Anthropic SSE event is invalid") }

@@ -175,6 +175,43 @@ describe("first-party provider adapters", () => {
     }
   })
 
+  test("a reply streamed as far more than 8,192 token events completes", async () => {
+    const deltas = 20_000
+    const chat = Array.from({ length: deltas }, () => 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n').join("") + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    const messages = 'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+      + Array.from({ length: deltas }, () => 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}\n\n').join("")
+      + 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n'
+    const server = Bun.serve({ port: 0, fetch: (incoming) => new Response(new URL(incoming.url).pathname.startsWith("/chat") ? chat : messages, { headers: { "content-type": "text/event-stream" } }) })
+    const credential = { credential: { kind: "caller" as const, account: "fixture" }, credentialResolver: createCallerCredentialResolver(() => "secret"), thinking: "off" as const }
+    try {
+      const openai = createOpenAIModelPort({ provider: "openai", model: "fixture", protocol: "openai-chat", endpoint: server.url.toString(), ...credential })
+      const anthropic = createAnthropicModelPort({ provider: "anthropic", model: "fixture", endpoint: server.url.toString(), ...credential })
+      for (const port of [openai, anthropic]) {
+        const chunks = await collect(port.complete({ ...request, parts: [] }))
+        expect(chunks.at(-1)).toEqual({ type: "response", response: { type: "text", text: "x".repeat(deltas) } })
+      }
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test("a model request refused as overloaded before streaming is sent again; one cut mid-stream is not", async () => {
+    let requests = 0
+    let reply = (): Response => new Response("overloaded", { status: 529 })
+    const server = Bun.serve({ port: 0, fetch: () => { requests += 1; const answer = reply(); reply = () => new Response('data: {"type":"content_block_delta","index":0,"delta":{"text":"done"}}\n\ndata: {"type":"message_stop"}\n\n', { headers: { "content-type": "text/event-stream" } }); return answer } })
+    try {
+      const port = createAnthropicModelPort({ provider: "anthropic", model: "fixture", endpoint: server.url.toString(), credential: { kind: "caller", account: "fixture" }, credentialResolver: createCallerCredentialResolver(() => "secret"), thinking: "off", retryDelayMs: 0 })
+      expect((await collect(port.complete({ ...request, parts: [] }))).at(-1)).toEqual({ type: "response", response: { type: "text", text: "done" } })
+      expect(requests).toBe(2)
+      requests = 0
+      reply = () => new Response('data: {"type":"content_block_delta","index":0,"delta":{"text":"partial"}}\n\n', { headers: { "content-type": "text/event-stream" } })
+      expect((await collect(port.complete({ ...request, parts: [] }))).at(-1)).toMatchObject({ type: "response", response: { type: "text", text: expect.stringContaining("the connection ended") } })
+      expect(requests).toBe(1)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
   test("a 400 about the conversation itself is not sent again; one about an optional field is", async () => {
     let requests = 0
     let reply = (_body: Record<string, unknown>): Response => Response.json({ type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 250000 tokens > 200000 maximum" } }, { status: 400 })

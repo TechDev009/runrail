@@ -57,6 +57,23 @@ thinking on carry `include: ["reasoning.encrypted_content"]` and `store:
 false`. Each is dropped for the rest of the adapter's life after the endpoint
 answers 400 to it (Responses: 400 or 422).
 
+## Transport limits and retries
+
+A model stream is bounded by bytes (`maxStreamBytes`, 16 MiB by default, at
+most 64 MiB). Its event count (`maxEvents`, about one event per token)
+defaults to 1,048,576 and is at most 4,194,304, so a long reply or a large
+file write ends at the byte limit, not the event count.
+
+A model request or model list refused with 408, 425, 429, 500, 502, 503, 504,
+or 529 before any of its body was read is sent again, up to `maxRetries`
+(default 2, at most 5; a model list tries at most once more).
+The wait doubles from `retryDelayMs` (default 500 ms) and never exceeds 10
+seconds; a `retry-after-ms` or `Retry-After` header sets it instead. A 429
+whose body names a used-up quota or billing, or a Retry-After past 10 seconds,
+is not sent again. A cancelled turn stops waiting at once. A model stream is
+never sent again once its body started, nor after a dropped connection or a
+timeout.
+
 ## Credentials and ownership
 
 Runrail accepts credential references, never raw API keys in persisted CLI or
