@@ -4,6 +4,11 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+- Standalone `runrail` executables, which need no Bun: macOS (Apple silicon
+  and Intel), Linux (arm64 and x64, glibc), and Windows (x64, experimental).
+  Each release carries them with `install.sh`, which puts one in
+  `~/.local/bin` after checking it against the release's `SHA256SUMS.txt`,
+  without sudo: `curl -fsSL https://github.com/TechDev009/runrail/releases/latest/download/install.sh | sh`.
 - `runrail sdk install` downloads Anthropic's Claude Agent SDK from npm after
   you agree, into `~/.runrail/agent-sdk` (or `RUNRAIL_AGENT_SDK_DIR`). The
   download must match a pinned SHA-512, and every load checks its files
@@ -11,6 +16,12 @@ All notable changes to Runrail will be documented here.
   run or console without it asks whether to download it when you are at the
   terminal; otherwise it, `runrail doctor`, and `HARNESS_SDK_MISSING` name the
   command.
+
+### Security
+
+- The executables never load a `.env` or `bunfig.toml` from the folder they
+  start in: a project's `bunfig.toml` can name a `preload` script, which would
+  run inside Runrail.
 
 ## [0.1.1] - 2026-10-24
 

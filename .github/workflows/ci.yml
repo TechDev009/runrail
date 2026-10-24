@@ -66,26 +66,82 @@ jobs:
         if: runner.os == 'Linux'
         run: bun run test:packed
 
-  # A version tag (v0.1.0, matching package.json and with a CHANGELOG.md section) packs the
-  # package and collects it into a draft GitHub release: nobody sees it until a maintainer
-  # publishes it. `bun add -g <the tarball's URL>` installs the CLI from it.
+  # The standalone executables a release ships, each built and smoke-tested on the platform it
+  # is for (darwin-x64 through Rosetta). Pull requests build them too, so a break shows before a
+  # tag. Windows is experimental: its failure does not hold up the release.
+  binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: linux-x64
+          - os: ubuntu-24.04-arm
+            targets: linux-arm64
+          - os: macos-latest
+            targets: darwin-arm64 darwin-x64
+          - os: windows-latest
+            targets: windows-x64
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Rosetta runs the Intel build on the Apple silicon runner for its smoke test.
+      - name: Install Rosetta
+        if: runner.os == 'macOS'
+        run: /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Build and smoke-test
+        shell: bash
+        env:
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          args=()
+          for target in $TARGETS; do args+=(--target "$target"); done
+          bun scripts/build-binaries.ts --out dist/binaries --smoke "${args[@]}"
+
+      - name: Keep the archives for the release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries-${{ matrix.os }}
+          path: |
+            dist/binaries/*.tar.gz
+            dist/binaries/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # A version tag (v0.1.0, matching package.json and with a CHANGELOG.md section) collects the
+  # package, the executables, install.sh, and SHA256SUMS.txt into a draft GitHub release: nobody
+  # sees it until a maintainer publishes it, which also runs publish.yml.
   release:
     name: Draft release
-    needs: verify
+    needs: [verify, binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
 
-      - name: Pack the release
+      - name: Check the tag and the notes
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -99,8 +155,28 @@ jobs:
             echo "::error::CHANGELOG.md has no section for $version"
             exit 1
           fi
-          mkdir release
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Collect the executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: binaries-*
+          path: release
+          merge-multiple: true
+
+      - name: Pack the release
+        run: |
+          for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            if [ ! -f "release/runrail-$VERSION-$platform.tar.gz" ]; then
+              echo "::error::the $platform executable is missing"
+              exit 1
+            fi
+          done
+          if [ ! -f "release/runrail-$VERSION-windows-x64.zip" ]; then
+            echo "::warning::the experimental Windows executable did not build; the release goes out without it"
+          fi
           bun pm pack --destination release
+          cp install.sh release/install.sh
           (cd release && sha256sum -- * > SHA256SUMS.txt)
 
       - name: Create or update the draft
