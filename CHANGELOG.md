@@ -4,6 +4,14 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+- `runrail sdk install` downloads Anthropic's Claude Agent SDK from npm after
+  you agree, into `~/.runrail/agent-sdk` (or `RUNRAIL_AGENT_SDK_DIR`). The
+  download must match a pinned SHA-512, and every load checks its files
+  against it. `runrail sdk status` says where the SDK comes from. A Claude Code
+  run or console without it asks whether to download it when you are at the
+  terminal; otherwise it, `runrail doctor`, and `HARNESS_SDK_MISSING` name the
+  command.
+
 ## [0.1.1] - 2026-10-24
 
 Security fixes from a review of 0.1.0, and fixes for long model replies.

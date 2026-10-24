@@ -47,7 +47,8 @@ terminal behavior. The vendor process is still caller-owned and is not an
 isolation boundary.
 
 Claude Code's Agent SDK route (`claude-code.sdk`, `claude.agent-sdk`) is the
-second bidirectional route. With the optional SDK available it is the default
+second bidirectional route. With the optional SDK available (`runrail sdk
+install` downloads it) it is the default
 for `--backend claude-code`; `--harness-protocol print` keeps print mode and
 `--harness-protocol sdk` fails with `HARNESS_SDK_MISSING` without it. It
 resolves approvals (once or for the session), interrupts, stops the background

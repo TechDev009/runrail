@@ -21,6 +21,7 @@ export type { CodexAppServerBackendOptions } from "./backend/codex-app-server.ts
 export { ACP_PROTOCOL_VERSION, AcpAgentBackend, permissionDecision as acpPermissionDecision } from "./backend/acp-agent.ts"
 export type { AcpAgentBackendOptions, AcpAuthentication, AcpProcessSettings } from "./backend/acp-agent.ts"
 export { CLAUDE_AGENT_SDK, ClaudeAgentSdkBackend, claudeAgentSdkStatus, installClaudeAgentSdk, loadClaudeAgentSdk, parseClaudeAgentSdk, registerClaudeAgentSdk, registerClaudeAgentSdkInstaller, registerClaudeAgentSdkLoader } from "./backend/claude-agent-sdk.ts"
+export { agentSdkDirectory, agentSdkInstaller, agentSdkLoader, useDownloadedClaudeAgentSdk, type AgentSdkPin } from "./backend/claude-agent-sdk-download.ts"
 export type { ClaudeAgentSdk, ClaudeAgentSdkBackendOptions, ClaudeAgentSdkInstaller, ClaudeAgentSdkSource, ClaudeAgentSdkStatus,ClaudeApprovalScope, ClaudeSdkElicitationRequest, ClaudeSdkElicitationResult, ClaudeSdkPermissionContext, ClaudeSdkPermissionResult, ClaudeSdkQuery, ClaudeSdkQueryOptions, ClaudeSdkSpawnOptions, ClaudeSdkUserMessage } from "./backend/claude-agent-sdk.ts"
 export type { ClaudeSdkHookCallback, ClaudeSdkHookMatcher, ClaudeSdkHookOutput } from "./backend/claude-permission-gate.ts"
 export { HttpAgentBackend, HttpAgentBackendError, createHttpAgentAdapter, createHttpAgentBackend } from "./backend/http-agent.ts"

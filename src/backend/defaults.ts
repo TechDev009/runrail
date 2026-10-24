@@ -17,7 +17,7 @@ import { parseHarnessAuthOptions } from "../harness/auth.ts"
 import { harnessAccountEnvironment, parseHarnessAccountOptions, type HarnessAccountOptions } from "../harness/account.ts"
 import type { HarnessAuthOptions } from "../harness/types.ts"
 import { createClaudeCodeHarness, createClaudeCodeSdkHarness } from "../harness/claude-code.ts"
-import { CLAUDE_AGENT_SDK, claudeAgentSdkInstallCommand, loadClaudeAgentSdk } from "./claude-agent-sdk.ts"
+import { CLAUDE_AGENT_SDK, claudeAgentSdkStatus, loadClaudeAgentSdk } from "./claude-agent-sdk.ts"
 import { createCodexHarness } from "../harness/codex.ts"
 import { resolveCodexCommand } from "../harness/detect.ts"
 import { createCopilotHarness } from "../harness/copilot.ts"
@@ -259,7 +259,10 @@ async function createClaudeCodeBackend(context: RunrailBackendContext): Promise<
         ...approvalSink(context),
       })
     }
-    if (protocol === "sdk") throw new Error(`HARNESS_SDK_MISSING: the Claude Agent SDK is not installed. Install it with: ${claudeAgentSdkInstallCommand()} (${CLAUDE_AGENT_SDK.npmUrl})`)
+    if (protocol === "sdk") {
+      const status = claudeAgentSdkStatus()
+      throw new Error(`HARNESS_SDK_MISSING: the Claude Agent SDK is not installed. Install it with: ${status.downloadCommand ?? status.installCommand} (${CLAUDE_AGENT_SDK.npmUrl})`)
+    }
   }
   return createCommandBackend(context, "claude", mapClaudeCodeEvent)
 }

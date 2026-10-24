@@ -2,7 +2,7 @@ import { constants } from "node:fs"
 import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
-import { CLAUDE_AGENT_SDK, claudeAgentSdkInstallCommand, claudeAgentSdkSource, type ClaudeAgentSdkSource } from "./backend/claude-agent-sdk.ts"
+import { CLAUDE_AGENT_SDK, claudeAgentSdkInstallCommand, claudeAgentSdkSource, claudeAgentSdkStatus, type ClaudeAgentSdkSource } from "./backend/claude-agent-sdk.ts"
 import { HARNESS_PROBE_TARGETS, probeHarness, type HarnessProbe, type HarnessProbeTarget } from "./harness/detect.ts"
 import { listCliSessions } from "./sessions-cli.ts"
 import { RUNRAIL_VERSION } from "./version.ts"
@@ -33,6 +33,8 @@ export interface DoctorOptions {
   readonly gitVersion?: (cwd?: string) => Promise<GitAnswer>
   readonly agentSdk?: () => ClaudeAgentSdkSource
   readonly agentSdkInstallCommand?: string
+  /** The command that downloads it, as `claude.sdk.status` gives it; `null` for none. */
+  readonly agentSdkDownloadCommand?: string | null
 }
 
 export interface GitAnswer {
@@ -74,7 +76,8 @@ export async function runDoctor(options: DoctorOptions): Promise<readonly Doctor
   ]
   for (const [target, found] of tools) checks.push(toolCheck(target, found))
   const claudeInstalled = tools.some(([target, found]) => target === "claude-code" && found.installed)
-  checks.push(agentSdkCheck(sdk, claudeInstalled, options.agentSdkInstallCommand ?? claudeAgentSdkInstallCommand()))
+  const download = options.agentSdkDownloadCommand === undefined ? claudeAgentSdkStatus().downloadCommand : options.agentSdkDownloadCommand ?? undefined
+  checks.push(agentSdkCheck(sdk, claudeInstalled, options.agentSdkInstallCommand ?? claudeAgentSdkInstallCommand(), download))
   if (options.cwd !== undefined) {
     checks.push(gitAnswer.inRepository === true
       ? { name: "Project", level: "ok", detail: `${tilde(options.cwd)} is a git repository` }
@@ -94,10 +97,13 @@ export function doctorText(checks: readonly DoctorCheck[]): string {
   return `${lines.join("\n")}\n`
 }
 
-function agentSdkCheck(sdk: ClaudeAgentSdkSource, claudeInstalled: boolean, installCommand: string): DoctorCheck {
+function agentSdkCheck(sdk: ClaudeAgentSdkSource, claudeInstalled: boolean, installCommand: string, downloadCommand: string | undefined): DoctorCheck {
   const name = "Claude Agent SDK"
   if (sdk === "missing") return { name, level: claudeInstalled ? "warn" : "off", detail: `not installed, so Claude Code runs in print mode and cannot ask before tools. Install it with: ${installCommand} (${CLAUDE_AGENT_SDK.npmUrl})` }
-  if (sdk === "installable") return { name, level: claudeInstalled ? "warn" : "off", detail: "not downloaded yet; Runrail Desktop downloads it when you allow it" }
+  if (sdk === "installable") {
+    const detail = downloadCommand === undefined ? "not downloaded yet; Runrail Desktop downloads it when you allow it" : `not downloaded yet, so Claude Code runs in print mode and cannot ask before tools. Download it with: ${downloadCommand} (${CLAUDE_AGENT_SDK.npmUrl})`
+    return { name, level: claudeInstalled ? "warn" : "off", detail }
+  }
   return { name, level: "ok", detail: `${sdk === "fetched" ? "fetched from npm when first needed" : sdk}; Claude Code asks before each tool` }
 }
 

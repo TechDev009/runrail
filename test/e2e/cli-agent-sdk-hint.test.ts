@@ -20,7 +20,7 @@ async function runCli(args: readonly string[]): Promise<{ readonly stderr: strin
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, PATH: cwd },
+    env: { ...process.env, PATH: cwd, RUNRAIL_AGENT_SDK_DIR: join(cwd, "agent-sdk") },
   })
   const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   return { stdout, stderr }
@@ -29,8 +29,19 @@ async function runCli(args: readonly string[]): Promise<{ readonly stderr: strin
 test("a Claude Code run without the SDK says it cannot ask before tools, with the command and the npm page", async () => {
   const { stderr } = await runCli(["run", "--backend", "claude-code", "--cwd", cwd, "--no-session", "--harness-auth", "subscription", "hi"])
   expect(stderr).toContain("Claude Code is running in print mode, so it cannot ask before it uses a tool.")
-  expect(stderr).toContain("bun add --no-save @anthropic-ai/claude-agent-sdk@^0.3.288")
+  expect(stderr).toContain("\n  runrail sdk install\n")
   expect(stderr).toContain("https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk")
+})
+
+test("runrail sdk reports where it would download the SDK, and never downloads when no one can say yes", async () => {
+  const status = await runCli(["sdk", "status", "--json"])
+  expect(JSON.parse(status.stdout)).toMatchObject({ ready: false, source: "installable", version: "0.3.288", downloadCommand: "runrail sdk install", directory: join(cwd, "agent-sdk") })
+  const child = Bun.spawn([process.execPath, resolve(import.meta.dir, "../../src/cli.ts"), "sdk", "install"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, RUNRAIL_AGENT_SDK_DIR: join(cwd, "agent-sdk") } })
+  const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
+  expect(code).toBe(2)
+  expect(stderr).toContain("Runrail can download the Claude Agent SDK 0.3.288 from npm into")
+  expect(stderr).toContain("runrail sdk install --yes")
+  expect(await Bun.file(join(cwd, "agent-sdk")).exists()).toBe(false)
 })
 
 test("--json, print mode asked for by name, and other backends say nothing about the SDK", async () => {

@@ -70,11 +70,13 @@ import { getCustomProviderPreset, getProviderPreset, isProviderFamilyId } from "
 import { timed } from "./startup-timings.ts"
 import { exportCliSession, listCliSessions, openCliSession, prepareCliSession, resolveSessionsRoot, routeArgs, routeBackend, shortId, type CliSessionPlan, type OpenCliSession } from "./sessions-cli.ts"
 import { doctorText, runDoctor } from "./doctor.ts"
-import { claudeAgentSdkStatus } from "./backend/claude-agent-sdk.ts"
+import { claudeAgentSdkSource, claudeAgentSdkStatus } from "./backend/claude-agent-sdk.ts"
+import { agentSdkDirectory, useDownloadedClaudeAgentSdk } from "./backend/claude-agent-sdk-download.ts"
+import { offerAgentSdk, parseSdkCliRequest, runSdkCli, type SdkCliRequest } from "./sdk-cli.ts"
 import type { TranscriptStore } from "./transcript/store.ts"
 import { terminalText } from "./workbench/terminal-text.ts"
 export type RunrailBackendName = "replay" | "native" | "pi" | "codex" | "claude-code" | "copilot" | "opencode" | "gemini" | "goose"
-export type RunrailCommand = "run" | "pi" | "backends" | "models" | "providers" | "harnesses" | "compatibility" | "plugins" | "packages" | "serve" | "control" | "console" | "benchmark" | "mcp" | "browser-mcp" | "connectors-mcp" | "threads-mcp" | "computer-mcp" | "images-mcp" | "login" | "logout" | "auth" | "service" | "sessions" | "export" | "doctor"
+export type RunrailCommand = "run" | "pi" | "backends" | "models" | "providers" | "harnesses" | "compatibility" | "plugins" | "packages" | "serve" | "control" | "console" | "benchmark" | "mcp" | "browser-mcp" | "connectors-mcp" | "threads-mcp" | "computer-mcp" | "images-mcp" | "login" | "logout" | "auth" | "service" | "sessions" | "export" | "doctor" | "sdk"
 export type VerificationName = "check" | "assure" | "test"
 export type RunrailTerminalStatus =
   | "succeeded"
@@ -223,6 +225,7 @@ export interface CliOptions {
   readonly sessionExport?: { readonly ref: string; readonly format: "json" | "markdown"; readonly out?: string }
   /** `doctor --cwd`: a project folder to check as well. */
   readonly doctorCwd?: string
+  readonly sdkCli?: SdkCliRequest
 }
 
 export interface RunrailRunOptions {
@@ -374,9 +377,13 @@ export function parseCliArgs(argv: readonly string[], env: Readonly<Record<strin
   if (argv[0] === "sessions") return parseSessionsCliArgs(argv.slice(1))
   if (argv[0] === "export") return parseExportCliArgs(argv.slice(1))
   if (argv[0] === "doctor") return parseDoctorCliArgs(argv.slice(1))
+  if (argv[0] === "sdk") {
+    const sdkCli = parseSdkCliRequest(argv.slice(1))
+    return { command: "sdk", cwd: resolve("."), backend: "native", maxSteps: DEFAULT_MAX_STEPS, maxRepairAttempts: 2, verify: "check", json: sdkCli.json, task: "", piArgs: Object.freeze([]), sdkCli }
+  }
   const command = argv[0]
   if (command !== "run" && command !== "serve" && command !== "control" && command !== "console")
-    throw new Error("usage: runrail run|serve|control|console|sessions|export|doctor|benchmark|mcp|providers|harnesses|compatibility|login|logout|auth --backend replay|native|pi|codex|claude-code|copilot|opencode|gemini|goose --cwd <path> [task]")
+    throw new Error("usage: runrail run|serve|control|console|sessions|export|doctor|sdk|benchmark|mcp|providers|harnesses|compatibility|login|logout|auth --backend replay|native|pi|codex|claude-code|copilot|opencode|gemini|goose --cwd <path> [task]")
   let cwd: string | undefined
   let backend: RunrailBackendName = "native"
   const requiredCapabilities: string[] = []
@@ -1382,14 +1389,30 @@ function localMinute(ms: number): string {
   return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`
 }
 
-/** A Claude Code run on its usual route, without the SDK, says what it cannot do and how to fix that. */
-function agentSdkHint(options: CliOptions): void {
+/**
+ * A Claude Code run on its usual route, without the SDK, offers to download it when `ask` and a
+ * person is at the terminal, else says what it cannot do and how to fix that.
+ */
+async function agentSdkHint(options: CliOptions, ask: boolean): Promise<void> {
   if (options.json || options.backend !== "claude-code") return
   // The same test createClaudeCodeBackend makes: these routes never use the SDK.
   if (options.harnessProtocol !== undefined || options.harnessPersistent === true || (options.harnessArgs?.length ?? 0) > 0 || options.harnessCommand !== undefined) return
-  const sdk = claudeAgentSdkStatus()
-  if (sdk.ready) return
-  console.error(`Claude Code is running in print mode, so it cannot ask before it uses a tool. To fix that, install the Claude Agent SDK (Anthropic's package, under its terms: ${sdk.termsUrl}):\n  ${sdk.installCommand}\n  ${sdk.npmUrl}`)
+  if (claudeAgentSdkStatus().ready) return
+  await withTerminalConfirm(ask, (confirm) => offerAgentSdk({ note: (line) => console.error(line), ...(confirm === undefined ? {} : { confirm }) }, agentSdkDirectory()))
+}
+
+function terminalAttended(): boolean {
+  return process.stdin.isTTY === true && process.stderr.isTTY === true
+}
+
+/** Runs `use` with a yes-or-no question on the terminal when `ask` and a person is there to answer. */
+async function withTerminalConfirm<T>(ask: boolean, use: (confirm: ((question: string) => Promise<boolean>) | undefined) => Promise<T>): Promise<T> {
+  const terminal = ask && terminalAttended() ? createInterface({ input: process.stdin, output: process.stderr }) : undefined
+  try {
+    return await use(terminal === undefined ? undefined : async (question) => /^y(es)?$/i.test((await terminal.question(`${question} [y/N] `).catch(() => "")).trim()))
+  } finally {
+    terminal?.close()
+  }
 }
 
 /** Where a saved session can be picked up again. `--json` output already carries the id. */
@@ -2031,6 +2054,7 @@ Inspect
   plugins, packages   Manage local plugins and packages
   benchmark   Deterministic replay benchmarks
   doctor      Check this machine for Runrail: [--cwd <path>] [--json]
+  sdk         Anthropic's Claude Agent SDK, so Claude Code asks before tools: runrail sdk status|install
 
 Backends: replay, native, pi, codex, claude-code, copilot, opencode, gemini, goose
 Docs: https://github.com/TechDev009/runrail#readme
@@ -2047,15 +2071,16 @@ function informationAsked(argv: readonly string[]): "help" | "version" | undefin
   return argv.slice(1).some((arg) => arg === "--help" || arg === "-h") ? "help" : undefined
 }
 
-/**
- * Runs the command line. Exported for a build that composes the CLI, such as a desktop sidecar that
- * registers a bundled Agent SDK first; `import.meta.main` is false in a module such a build imports.
- */
 // A check that fails in a project it does not fit would have the agent edit code after any message, even "hi".
 function askedToVerify(options: CliOptions): boolean {
   return options.verifyAfterTurn === true || options.verificationCommand !== undefined
 }
 
+/**
+ * Runs the command line. Exported for a build that composes the CLI, such as a desktop sidecar that
+ * registers a bundled Agent SDK first; `import.meta.main` is false in a module such a build imports.
+ * With no SDK found or registered, it loads the one `runrail sdk install` downloads.
+ */
 export async function runCliMain(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const asked = informationAsked(argv)
   if (asked !== undefined) {
@@ -2067,6 +2092,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
     process.exitCode = 2
     return
   }
+  if (claudeAgentSdkSource() === "missing") useDownloadedClaudeAgentSdk()
   try {
     if (argv[0] === "new") {
       const stop = new AbortController()
@@ -2143,9 +2169,15 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
       await runExportCli(options)
     } else if (options.command === "doctor") {
       process.exitCode = await runDoctorCli(options)
+    } else if (options.command === "sdk" && options.sdkCli !== undefined) {
+      const request = options.sdkCli
+      process.exitCode = await withTerminalConfirm(request.action === "install" && !request.yes, (confirm) =>
+        runSdkCli(request, { out: (line) => console.log(line), note: (line) => console.error(line), ...(confirm === undefined ? {} : { confirm }) }, agentSdkDirectory()))
     } else if (options.command === "console") {
       let piExtensions: PiExtensionHost | undefined
       const saved = await openCliSession(plan, { cwd: options.cwd, backend: options.backend, route: routeArgs(plan.argv) })
+      const attended = terminalAttended()
+      if (attended) await agentSdkHint(options, true)
       try {
         piExtensions = await createCliPiExtensionHost(options)
         const status = await runRunrailTui({
@@ -2187,7 +2219,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
       } finally {
         await piExtensions?.close()
         // After the full-screen console, where it would have been drawn over.
-        agentSdkHint(options)
+        if (!attended) await agentSdkHint(options, false)
         sessionHint(saved, "console", options.json)
       }
     } else if (options.command === "control") {
@@ -2348,7 +2380,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
       }
     } else {
       const saved = await openCliSession(plan, { cwd: options.cwd, backend: options.backend, route: routeArgs(plan.argv) })
-      agentSdkHint(options)
+      await agentSdkHint(options, true)
       const result = await runCliHeadless(options, saved)
       if (options.json) console.log(JSON.stringify(result, null, 2))
       else {

@@ -1,0 +1,186 @@
+import { afterEach, expect, test } from "bun:test"
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { join } from "node:path"
+import { CLAUDE_AGENT_SDK, claudeAgentSdkStatus, registerClaudeAgentSdkInstaller, registerClaudeAgentSdkLoader } from "../../src/backend/claude-agent-sdk.ts"
+import { agentSdkDirectory, agentSdkInstaller, agentSdkLoader, installAgentSdk, untar, useDownloadedClaudeAgentSdk, type AgentSdkPin } from "../../src/backend/claude-agent-sdk-download.ts"
+
+const folders: string[] = []
+afterEach(async () => {
+  registerClaudeAgentSdkLoader(undefined)
+  registerClaudeAgentSdkInstaller(undefined)
+  for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true })
+})
+
+async function scratch(): Promise<string> {
+  const folder = await mkdtemp(join(tmpdir(), "runrail-agent-sdk-"))
+  folders.push(folder)
+  return folder
+}
+
+function entry(name: string, data = "", type = "0"): Uint8Array<ArrayBuffer> {
+  const body = new TextEncoder().encode(data)
+  const header = new Uint8Array(512)
+  const put = (offset: number, text: string): void => header.set(new TextEncoder().encode(text), offset)
+  put(0, name.slice(0, 100))
+  put(100, "0000644\0")
+  put(124, `${body.length.toString(8).padStart(11, "0")}\0`)
+  put(156, type)
+  put(257, "ustar\0")
+  const block = new Uint8Array(512 + Math.ceil(body.length / 512) * 512)
+  block.set(header)
+  block.set(body, 512)
+  return block
+}
+
+function tar(...entries: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(entries.reduce((sum, item) => sum + item.length, 0) + 1024)
+  let offset = 0
+  for (const item of entries) {
+    out.set(item, offset)
+    offset += item.length
+  }
+  return out
+}
+
+const PACKAGE = tar(
+  entry("package/package.json", JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", exports: { ".": { default: "./sdk.mjs" } } })),
+  entry("package/sdk.mjs", 'export function query() { return "from npm" }\n'),
+)
+
+function served(archive: Uint8Array<ArrayBuffer>): { readonly pin: AgentSdkPin; readonly tgz: Uint8Array<ArrayBuffer> } {
+  const tgz = Bun.gzipSync(archive)
+  return { pin: { version: "0.3.288", integrity: `sha512-${new Bun.CryptoHasher("sha512").update(tgz).digest("base64")}` }, tgz }
+}
+
+function registry(tgz: Uint8Array<ArrayBuffer>, status = 200): { readonly fetch: (url: string) => Promise<Response>; readonly urls: string[] } {
+  const urls: string[] = []
+  return {
+    urls,
+    fetch: async (url) => {
+      urls.push(url)
+      return new Response(status === 200 ? tgz : "not found", { status })
+    },
+  }
+}
+
+test("loading never downloads; the SDK comes from npm once, when the installer is run, and from disk after", async () => {
+  const folder = await scratch()
+  const { pin, tgz } = served(PACKAGE)
+  const npm = registry(tgz)
+  const load = agentSdkLoader(pin, folder)
+  const installer = agentSdkInstaller(pin, folder, npm.fetch)
+  expect(await load()).toBeUndefined()
+  expect([installer.version, installer.installed(), npm.urls]).toEqual(["0.3.288", false, []])
+  await installer.install()
+  expect(npm.urls).toEqual(["https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.288.tgz"])
+  expect(installer.installed()).toBe(true)
+  const sdk = (await load()) as { query: () => string }
+  expect(sdk.query()).toBe("from npm")
+  expect(npm.urls).toHaveLength(1)
+  expect(await readdir(folder)).toEqual(["0.3.288"])
+})
+
+test("files changed on disk after the download are never loaded; installing again puts the download back", async () => {
+  const folder = await scratch()
+  const { pin, tgz } = served(PACKAGE)
+  const npm = registry(tgz)
+  const load = agentSdkLoader(pin, folder)
+  const installer = agentSdkInstaller(pin, folder, npm.fetch)
+  const home = join(folder, pin.version)
+  const works = async (): Promise<void> => {
+    expect(installer.installed()).toBe(true)
+    expect(((await load()) as { query: () => string }).query()).toBe("from npm")
+  }
+  const refused = async (reason: string): Promise<void> => {
+    expect(installer.installed()).toBe(false)
+    await expect(load()).rejects.toThrow(reason)
+  }
+  await installer.install()
+  await works()
+
+  await writeFile(join(home, "sdk.mjs"), 'export function query() { return "edited" }\n')
+  await refused("sdk.mjs changed after it was downloaded")
+  await installer.install()
+  await works()
+  expect(npm.urls).toHaveLength(2)
+
+  // A module folder added beside the SDK could be what its imports resolve to.
+  await mkdir(join(home, "node_modules", "zod"), { recursive: true })
+  await writeFile(join(home, "node_modules", "zod", "index.js"), "export const z = 'planted'\n")
+  await refused("node_modules/zod/index.js changed after it was downloaded")
+  await installer.install()
+  await works()
+
+  await unlink(join(home, "sdk.mjs"))
+  await symlink(join(folder, "elsewhere.mjs"), join(home, "sdk.mjs"))
+  await refused("sdk.mjs changed after it was downloaded")
+  await installer.install()
+
+  await unlink(join(home, "sdk.mjs"))
+  await refused("went missing")
+  await installer.install()
+
+  // A copy from before the download was kept, or with the kept download altered, is downloaded again too.
+  await writeFile(join(home, ".runrail-download.tgz"), Bun.gzipSync(PACKAGE).subarray(0, 20))
+  await refused("does not match its pinned SHA-512")
+  await unlink(join(home, ".runrail-download.tgz"))
+  expect(installer.installed()).toBe(false)
+  await installer.install()
+  await works()
+  expect(await readdir(folder)).toEqual(["0.3.288"])
+})
+
+test("a package with a file where the download is kept is refused", async () => {
+  const folder = await scratch()
+  const { pin, tgz } = served(tar(entry("package/package.json", "{}"), entry("package/.runrail-download.tgz", "x")))
+  await expect(agentSdkInstaller(pin, folder, registry(tgz).fetch).install()).rejects.toThrow("where Runrail keeps the download")
+  expect(await readdir(folder)).toEqual([])
+})
+
+test("a download that does not match the pinned SHA-512 is refused before anything is written", async () => {
+  const folder = await scratch()
+  const { pin } = served(PACKAGE)
+  const tampered = served(tar(entry("package/package.json", "{}"), entry("package/sdk.mjs", "export const query = () => 'evil'"))).tgz
+  await expect(agentSdkInstaller(pin, folder, registry(tampered).fetch).install()).rejects.toThrow("does not match its pinned SHA-512")
+  await expect(agentSdkInstaller(pin, folder, registry(tampered, 404).fetch).install()).rejects.toThrow("HTTP 404")
+  expect(await readdir(folder)).toEqual([])
+  await expect(installAgentSdk({ ...pin, integrity: "sha1-abc" }, join(folder, "x"), registry(tampered).fetch)).rejects.toThrow("integrity is invalid")
+  await expect(installAgentSdk({ ...pin, version: "../../evil" }, join(folder, "x"), registry(tampered).fetch)).rejects.toThrow("version is invalid")
+})
+
+test("Runrails that install at once end with one copy", async () => {
+  const folder = await scratch()
+  const { pin, tgz } = served(PACKAGE)
+  await Promise.all([1, 2, 3].map(() => installAgentSdk(pin, join(folder, pin.version), registry(tgz).fetch)))
+  expect(await readdir(folder)).toEqual(["0.3.288"])
+  expect(existsSync(join(folder, "0.3.288", "sdk.mjs"))).toBe(true)
+})
+
+test("the tarball reader takes plain files under package/ and refuses links and escapes", () => {
+  const long = `package/${"deep/".repeat(30)}file.js`
+  const pax = new TextEncoder().encode(`${String(long.length + 9)} path=${long}\n`)
+  const paxEntry = entry("PaxHeader", new TextDecoder().decode(pax), "x")
+  const files = untar(tar(entry("package/", "", "5"), entry("package/a/b.js", "b"), paxEntry, entry("package/ignored-name", "long")))
+  expect(files.map((file) => [file.path, new TextDecoder().decode(file.data)])).toEqual([["a/b.js", "b"], [long.slice("package/".length), "long"]])
+  expect(() => untar(tar(entry("package/link", "", "2")))).toThrow("not a regular file")
+  expect(() => untar(tar(entry("package/../../etc/x", "x")))).toThrow("not a plain relative path")
+  expect(() => untar(tar(entry("other/x.js", "x")))).toThrow("outside package/")
+  expect(() => untar(entry("package/cut.js", "x".repeat(600)).subarray(0, 700))).toThrow("truncated")
+})
+
+test("the pinned version is inside the range Runrail is built against, with a SHA-512 integrity", () => {
+  expect(Bun.semver.satisfies(CLAUDE_AGENT_SDK.pinned.version, CLAUDE_AGENT_SDK.range)).toBe(true)
+  expect(CLAUDE_AGENT_SDK.pinned.integrity).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/)
+})
+
+test("the command line's SDK folder is RUNRAIL_AGENT_SDK_DIR, else ~/.runrail/agent-sdk, and status names its command", async () => {
+  expect(agentSdkDirectory({})).toBe(join(homedir(), ".runrail", "agent-sdk"))
+  expect(agentSdkDirectory({ RUNRAIL_AGENT_SDK_DIR: "" })).toBe(join(homedir(), ".runrail", "agent-sdk"))
+  const folder = await scratch()
+  expect(agentSdkDirectory({ RUNRAIL_AGENT_SDK_DIR: folder })).toBe(folder)
+  const installer = useDownloadedClaudeAgentSdk(folder)
+  expect(installer).toMatchObject({ version: CLAUDE_AGENT_SDK.pinned.version, command: "runrail sdk install" })
+  expect(claudeAgentSdkStatus()).toMatchObject({ ready: false, source: "installable", version: CLAUDE_AGENT_SDK.pinned.version, downloadCommand: "runrail sdk install" })
+})

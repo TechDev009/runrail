@@ -258,6 +258,11 @@ export const CLAUDE_AGENT_SDK = Object.freeze({
   package: SDK_PACKAGE,
   /** Kept equal to package.json's peer range by a test. */
   range: "^0.3.288",
+  /**
+   * The version `runrail sdk install` downloads, with npm's integrity for it
+   * (`npm view @anthropic-ai/claude-agent-sdk@<version> dist.integrity`). A test keeps it in `range`.
+   */
+  pinned: Object.freeze({ version: "0.3.288", integrity: "sha512-W0axvKSBKC8E1rMvriV8NVMFfNv8uwN3HnJxUiFLJOQcJLp1MDp0SoAugkAKTn3WLx3JnqCxxME6bGvfNJzJoA==" }),
   npmUrl: "https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk",
   termsUrl: "https://code.claude.com/docs/en/legal-and-compliance",
 })
@@ -272,6 +277,8 @@ export interface ClaudeAgentSdkInstaller {
   /** Whether that version is downloaded already, found without loading it. */
   readonly installed: () => boolean
   readonly install: () => Promise<void>
+  /** What a person runs to download it, when the build has a command for that. */
+  readonly command?: string
 }
 
 /**
@@ -293,6 +300,8 @@ export interface ClaudeAgentSdkStatus {
   readonly termsUrl: string
   /** The command that installs it beside this Runrail. */
   readonly installCommand: string
+  /** The command that downloads it through the registered installer, when it has one. */
+  readonly downloadCommand?: string
 }
 
 let registeredSdk: ClaudeAgentSdk | undefined
@@ -350,6 +359,7 @@ export function claudeAgentSdkStatus(): ClaudeAgentSdkStatus {
     npmUrl: CLAUDE_AGENT_SDK.npmUrl,
     termsUrl: CLAUDE_AGENT_SDK.termsUrl,
     installCommand: claudeAgentSdkInstallCommand(),
+    ...(sdkInstaller?.command === undefined ? {} : { downloadCommand: sdkInstaller.command }),
   }
 }
 

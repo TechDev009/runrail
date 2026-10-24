@@ -323,15 +323,17 @@ Useful headless controls include:
   long-lived `claude` process per session that asks before it edits or runs a
   command, so "Ask" and "Auto-edit" raise approvals instead of refusing.
   Interrupt also stops the background commands the turn started. It is the
-  default for `--backend claude-code` when the optional peer
-  `@anthropic-ai/claude-agent-sdk` is installed (or registered by a build
-  that bundles it with `registerClaudeAgentSdk`); `--harness-protocol print`
-  keeps one `claude --print` run per turn. Asking for `sdk` without the SDK
-  fails with `HARNESS_SDK_MISSING`, and a Claude Code run on the usual route
-  without it prints, on stderr (not with `--json`), that Claude Code cannot
-  ask before tools, with the command that installs the SDK beside this
-  Runrail and its npm page; `runrail doctor` says the same. The SDK is
-  Anthropic's, under its Commercial Terms; Runrail does not ship it;
+  default for `--backend claude-code` when the SDK is there: downloaded with
+  `runrail sdk install`, the optional peer `@anthropic-ai/claude-agent-sdk`
+  installed beside Runrail, or registered by a build that bundles it with
+  `registerClaudeAgentSdk`; `--harness-protocol print` keeps one
+  `claude --print` run per turn. Asking for `sdk` without the SDK fails with
+  `HARNESS_SDK_MISSING`. A Claude Code run or console on the usual route
+  without it asks, on a terminal, whether to download it; otherwise, and not
+  with `--json`, it prints on stderr that Claude Code cannot ask before tools,
+  with `runrail sdk install` and the SDK's npm page. `runrail doctor` says the
+  same. The SDK is Anthropic's, under its Commercial Terms; Runrail does not
+  ship it (see [The Claude Agent SDK](#the-claude-agent-sdk));
 - with `--backend codex` or `--backend claude-code` and no `--harness-command`,
   Runrail drives the installed CLI unmodified and forwards the thread's
   settings: `--model`, `--thinking`, and the behavior file's mode, permissions,
@@ -405,6 +407,30 @@ adapter with `HarnessRegistry`; manifest, capability, control, event, auth,
 and security metadata are validated before admission. See
 [`docs/harness-compatibility.md`](harness-compatibility.md) and
 [`docs/harness-sdk.md`](harness-sdk.md) for the matrix and SDK contract.
+
+## The Claude Agent SDK
+
+Claude Code asks before it edits a file or runs a command only through
+Anthropic's Claude Agent SDK. Runrail never ships it: its licence reserves all
+rights, so you get it from npm under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
+
+```sh
+runrail sdk install
+runrail sdk status --json
+```
+
+`install` says what it downloads and where, asks first (`--yes` skips the
+question, and without a terminal it downloads nothing unless given), and
+downloads the version Runrail pins, refusing a download whose SHA-512 does not
+match the pin. It goes in `~/.runrail/agent-sdk/<version>`, or
+`$RUNRAIL_AGENT_SDK_DIR/<version>`, with the download kept beside its files.
+Every load checks the kept download against the pin and each file against it,
+so a file changed after the download is never loaded: `status` then reports it
+not downloaded and `install` downloads it again. `status` says where the SDK
+comes from (`downloaded`, `installed` beside Runrail, a build's `registered`
+copy, or `installable` when it is not there yet). An SDK installed beside
+Runrail (`bun add -g @anthropic-ai/claude-agent-sdk` next to a `bun add -g`
+install) is used as before, without the download.
 
 ## Serve and control
 

@@ -26,6 +26,7 @@ function options(overrides: Partial<DoctorOptions> = {}): DoctorOptions {
     probe: async (target) => tools[target] ?? { installed: false },
     gitVersion: async (cwd) => ({ version: "2.50.1", ...(cwd === undefined ? {} : { inRepository: false }) }),
     agentSdk: () => "missing",
+    agentSdkDownloadCommand: null,
     ...overrides,
   }
 }
@@ -66,10 +67,12 @@ test("without git or Claude Code, git warns and the SDK is not mentioned as a pr
   expect(checks.find((check) => check.name === "Claude Agent SDK")?.level).toBe("off")
 })
 
-test("a missing SDK says how to install it; one the desktop has not downloaded yet says it waits for a yes", async () => {
+test("a missing SDK says how to install it; one not downloaded yet names the command, or says the desktop waits for a yes", async () => {
   const missing = (await runDoctor(options({ agentSdkInstallCommand: "bun add -g @anthropic-ai/claude-agent-sdk@^0.3.288" }))).find((check) => check.name === "Claude Agent SDK")
   expect(missing?.detail).toContain("cannot ask before tools. Install it with: bun add -g @anthropic-ai/claude-agent-sdk@^0.3.288 (https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)")
   const waiting = (await runDoctor(options({ agentSdk: () => "installable" }))).find((check) => check.name === "Claude Agent SDK")
   expect(waiting).toEqual({ name: "Claude Agent SDK", level: "warn", detail: "not downloaded yet; Runrail Desktop downloads it when you allow it" })
+  const command = (await runDoctor(options({ agentSdk: () => "installable", agentSdkDownloadCommand: "runrail sdk install" }))).find((check) => check.name === "Claude Agent SDK")
+  expect(command?.detail).toBe("not downloaded yet, so Claude Code runs in print mode and cannot ask before tools. Download it with: runrail sdk install (https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)")
   expect((await runDoctor(options({ agentSdk: () => "downloaded" }))).find((check) => check.name === "Claude Agent SDK")?.level).toBe("ok")
 })
