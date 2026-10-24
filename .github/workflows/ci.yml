@@ -10,15 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  # Tests run on macOS too, where most people run Runrail; the checks that do not depend on the
+  # platform run on Linux only.
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
 
@@ -30,17 +36,21 @@ jobs:
 
       # The root config covers src and test only; the maintained scripts are checked here.
       - name: Typecheck scripts
+        if: runner.os == 'Linux'
         run: bunx tsc --noEmit -p tsconfig.scripts.json
 
       - name: Check publishable package metadata
+        if: runner.os == 'Linux'
         run: bun run package:check
       - name: Check public source boundary
+        if: runner.os == 'Linux'
         run: bun run source:check
 
       - name: Run tests
         run: bun test
 
       - name: Pack published Nifra artifacts
+        if: runner.os == 'Linux'
         run: |
           mkdir -p /tmp/nifra-runrail-pack
           npm pack @nifrajs/agent-protocol@5.3.0 --pack-destination /tmp/nifra-runrail-pack
@@ -53,6 +63,7 @@ jobs:
           npm pack @nifrajs/pi@5.3.0 --pack-destination /tmp/nifra-runrail-pack
 
       - name: Validate packed public imports
+        if: runner.os == 'Linux'
         run: bun run test:packed
 
   # A version tag (v0.1.0, matching package.json and with a CHANGELOG.md section) packs the
