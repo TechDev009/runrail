@@ -38,6 +38,8 @@ export interface RunrailSkillStatus {
 }
 
 const MAX_LIVE_EVENTS = 8_192
+/** The events a turn hands back to its caller: its newest ones, so its outcome is always among them. */
+export const MAX_TURN_EVENTS = 4_096
 
 /** A turn by its message's transcript seq, or by its turn id when this session ran it. */
 export type RunrailRewindTarget = { readonly turnId: string } | { readonly userSeq: number }
@@ -504,16 +506,21 @@ export class RunrailSessionController {
         this.activeController = controller
         this.activeJob = job
         try {
+          let completed = false
+          let failed = false
+          let repairs = 0
           for await (const event of this.session.prompt(job.input, controller.signal)) {
+            if (event.type === "session.completed") completed = true
+            else if (event.type === "session.failed") failed = true
+            else if (event.type === "repair.required") repairs += 1
             job.events.push(event)
+            // Trimmed in halves, so a long turn costs one copy per few thousand events, not one per event.
+            if (job.events.length >= MAX_TURN_EVENTS * 2) job.events.splice(0, job.events.length - MAX_TURN_EVENTS)
             this.publish(event)
           }
-          this.session.metrics?.recordRun(
-            job.events.some((event) => event.type === "session.completed") && !job.events.some((event) => event.type === "session.failed"),
-            job.events.filter((event) => event.type === "repair.required").length,
-          )
+          this.session.metrics?.recordRun(completed && !failed, repairs)
           if (typeof this.session.saveMetrics === "function") await this.session.saveMetrics()
-          job.resolve(Object.freeze(job.events))
+          job.resolve(Object.freeze(job.events.slice(-MAX_TURN_EVENTS)))
         } catch (error) {
           job.reject(error)
         } finally {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { CUSTOM_PROVIDER_PRESETS, PROVIDER_PRESETS, ProviderError, getCustomProviderPreset, getProviderPreset, isProviderFamilyId, parseProviderAuthStyle, parseProviderQuirks, resolveProviderTarget } from "../../src/index.ts"
+import { callerKeyVariableAllowedAt, keyVariableAllowedAt } from "../../src/providers/presets.ts"
 
 const ID = /^[a-z][a-z0-9._:-]{0,63}$/
 const ENVIRONMENT = /^[A-Z][A-Z0-9_]{0,127}$/
@@ -133,5 +134,18 @@ describe("provider target resolution", () => {
     expect(code(() => resolveProviderTarget({ provider: "openrouter", authStyle: "x-api-key" }))).toBe("PROVIDER_INVALID")
     // Switching a Messages row to an OpenAI protocol switches the key header with it.
     expect(resolveProviderTarget({ provider: "anthropic", protocol: "chat" }).authStyle).toBe("bearer")
+  })
+})
+
+describe("key variables a control caller names", () => {
+  test("one no preset owns goes only to this machine; a vendor's own goes only to that vendor", () => {
+    expect(callerKeyVariableAllowedAt("STRIPE_API_KEY", "http://127.0.0.1:9000/v1")).toBe(true)
+    expect(callerKeyVariableAllowedAt("STRIPE_API_KEY", "http://localhost:9000/v1")).toBe(true)
+    expect(callerKeyVariableAllowedAt("STRIPE_API_KEY", "http://[::1]:9000/v1")).toBe(true)
+    for (const endpoint of ["https://relay.example.test/v1", "https://api.openai.com/v1", "http://127.example.test/v1", "http://10.0.0.2:9000/v1", "not a url"]) expect([endpoint, callerKeyVariableAllowedAt("STRIPE_API_KEY", endpoint)]).toEqual([endpoint, false])
+    expect(callerKeyVariableAllowedAt("OPENAI_API_KEY", "https://api.openai.com/v1")).toBe(true)
+    expect(callerKeyVariableAllowedAt("OPENAI_API_KEY", "http://127.0.0.1:9000/v1")).toBe(false)
+    // The general rule still lets an unowned variable go anywhere; only control callers are held to this machine.
+    expect(keyVariableAllowedAt("STRIPE_API_KEY", "https://relay.example.test/v1")).toBe(true)
   })
 })

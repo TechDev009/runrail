@@ -404,3 +404,21 @@ test("a registered GitHub connector answers before a gh connection", async () =>
   expect(paths[0]).toContain("state=all")
   expect(await gh.calls()).toEqual([])
 })
+
+test("the connector list asks gh for the signed-in account, and never for the token", async () => {
+  const gh = await fakeGitHubCli()
+  const cwd = await tempDir("runrail-codehosts-connectors-")
+  const running = await startRunrailControlRpcServer({ cwd, backend: "native", authToken: token, loadExtensions: false, githubCli: gh.script, connectorsFile: join(cwd, "connectors.json"), nativeAccountsDir: join(cwd, "accounts"), model: { complete: () => ({ type: "text", text: "done" }) } })
+  cleanup.push(() => running.handle.stop())
+  const github = async (): Promise<{ connected: boolean } | undefined> => {
+    const response = await fetch(`${running.handle.url}/rpc`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ method: "connector.setup.list", params: {} }) })
+    return ((await response.json()) as { result: { connectors: { id: string; connected: boolean }[] } }).result.connectors.find((entry) => entry.id === "github")
+  }
+  await gh.reply("config", { stdout: "octo-cat\n" })
+  expect(await github()).toMatchObject({ connected: true })
+  await gh.reply("config", { stderr: "could not find key \"user\"\n", exitCode: 1 })
+  expect(await github()).toMatchObject({ connected: false })
+  const calls = await gh.calls()
+  expect(calls.map((call) => call.argv)).toEqual([["config", "get", "-h", "github.com", "user"], ["config", "get", "-h", "github.com", "user"]])
+  expect(calls.some((call) => call.argv.includes("token"))).toBe(false)
+})

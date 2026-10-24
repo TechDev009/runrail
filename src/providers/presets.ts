@@ -1,3 +1,4 @@
+import { isIP } from "node:net"
 import { ProviderError } from "./errors.ts"
 import type { ProviderAuthStyle, ProviderFamilyId, ProviderQuirks } from "./types.ts"
 
@@ -152,6 +153,18 @@ export function keyVariableAllowedAt(name: string, endpoint: string): boolean {
   let host: string
   try { host = new URL(endpoint).host } catch { return false }
   return owners.some((preset) => new URL(preset.baseUrl).host === host)
+}
+
+/**
+ * The stricter rule for a variable a control caller names: a vendor's own variable still goes only to
+ * that vendor, and one no preset owns only to this machine. Any `*_API_KEY` passes
+ * `isModelKeyVariable`, so without this a caller could send an unrelated secret to an address it picks.
+ */
+export function callerKeyVariableAllowedAt(name: string, endpoint: string): boolean {
+  if (PROVIDER_PRESETS.some((preset) => preset.environment === name)) return keyVariableAllowedAt(name, endpoint)
+  let hostname: string
+  try { hostname = new URL(endpoint).hostname.toLowerCase() } catch { return false }
+  return hostname === "localhost" || hostname === "[::1]" || (isIP(hostname) === 4 && hostname.startsWith("127."))
 }
 
 export function getProviderPreset(id: string): ProviderPreset | undefined {

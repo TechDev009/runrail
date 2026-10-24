@@ -65,7 +65,8 @@ import { createRunrailSession, RunrailSessionController, startRunrailControlRpcS
 - `SandboxRegistry` and `negotiateSandbox` require an explicitly supplied
   isolated OS, container, VM, or caller executor when a task needs isolation;
 - `createHostingProfile` validates loopback and remote TLS/auth deployment
-  profiles for embedding applications;
+  profiles for embedding applications; the control server does not read a
+  profile, so its listen options are passed to it separately;
 - `CommandAgentBackend` and `HttpAgentBackend` for generic caller-owned local
   JSONL and remote/A2A-compatible event transports;
 - `LocalGitWorktreeManager` for bounded local leases that can back subagents;

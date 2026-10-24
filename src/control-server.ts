@@ -18,7 +18,7 @@ import type { MultiAgentCoordinator, RunrailAgentTask } from "./agents/runner.ts
 import { createDefaultProviderCatalog, discoverProviderModels } from "./providers/catalog.ts"
 import type { ProviderCredentialResolver, ProviderDiscoveryOptions, ProviderModelOptions } from "./providers/types.ts"
 import { ProviderError } from "./providers/errors.ts"
-import { CUSTOM_PROVIDER_PRESETS, PROVIDER_PRESETS, getProviderPreset, isModelKeyVariable, keyVariableAllowedAt, resolveProviderTarget } from "./providers/presets.ts"
+import { CUSTOM_PROVIDER_PRESETS, PROVIDER_PRESETS, callerKeyVariableAllowedAt, getProviderPreset, isModelKeyVariable, resolveProviderTarget } from "./providers/presets.ts"
 import { createModelMetadataSource, mergeModelList, modelDescriptorFacts, type ModelMetadataSource } from "./providers/model-list.ts"
 import { createDefaultHarnessAdapters } from "./harness/defaults.ts"
 import { HarnessRegistry, negotiateHarnessFeatures } from "./harness/registry.ts"
@@ -55,7 +55,7 @@ import { linkDependencies, mineCandidates, validateCase } from "./evals/mine.ts"
 import { EvalRuns } from "./evals/run.ts"
 import { EvalError, MAX_CASES, parseSuite, SuiteStore } from "./evals/suite.ts"
 import { memoryLabel, recallBlock } from "./memory/block.ts"
-import { MemoryService, projectKey } from "./memory/service.ts"
+import { MemoryService, resolveProjectKey } from "./memory/service.ts"
 import { parseContact, parseMessage, parseSubscription, PushError, sendPush, vapidKeys, type Vapid } from "./push/web-push.ts"
 import { MemoryError } from "./memory/types.ts"
 import { MAX_WEBHOOK_INPUT, WorkflowRuns } from "./workflows/run.ts"
@@ -261,7 +261,10 @@ interface ControlServices {
 const MAX_TURN_LIVE_FRAMES = 1_024
 /** Recent `turn.enqueue` and `turn.steer` keys per session, oldest dropped first. */
 const MAX_TURN_KEYS = 256
-const turnAnswers = new WeakMap<RunrailSessionController, Map<string, Promise<unknown>>>()
+const MAX_TURN_ANSWER_BYTES = 4 * 1024 * 1024
+/** A repeated key is answered from at most this much, so the 256 kept keys stay within 4 MiB. */
+const MAX_KEPT_TURN_ANSWER_BYTES = 16 * 1024
+const turnAnswers = new WeakMap<RunrailSessionController, Map<string, Promise<TurnAnswer>>>()
 const HARNESS_STATUS_TTL_MS = 10_000
 const MAX_LOGIN_READ_BYTES = 64 * 1024
 const MAX_LOGIN_INPUT_BYTES = 8 * 1024
@@ -302,6 +305,24 @@ export async function startRunrailControlRpcServer(
     }
   }
   const unavailableTerminalCapabilities = validateUnavailableTerminalCapabilities(options.unavailableTerminalCapabilities)
+  // What startup made before it failed: released newest first, every step run even when one fails.
+  const made: (() => unknown)[] = []
+  try {
+    return await serveControl(options, hostname, allowRemote, maxBodyBytes, unavailableTerminalCapabilities, made)
+  } catch (error) {
+    await settleAll(made.reverse())
+    throw error
+  }
+}
+
+async function serveControl(
+  options: RunrailControlRpcServerOptions,
+  hostname: string,
+  allowRemote: boolean,
+  maxBodyBytes: number,
+  unavailableTerminalCapabilities: ReadonlySet<TerminalControlCapability>,
+  made: (() => unknown)[],
+): Promise<RunrailControlRpcServerHandle> {
   const token = options.authToken ?? randomBytes(32).toString("hex")
   const live = new LiveFrameHub()
   const callerLive = options.onLive
@@ -312,20 +333,27 @@ export async function startRunrailControlRpcServer(
   }
   const browserTools = parseBrowserTools(options.browserTools)
   const browserBridge = browserTools === undefined ? options.browser?.bridge : new BrowserBridge({ anySite: browserTools.anySite })
+  made.push(() => browserBridge?.close())
   const browserEndpoint = browserTools?.mcpCommand === undefined ? undefined : await createBrowserEndpoint(browserTools.mcpCommand)
+  made.push(() => browserEndpoint?.remove())
   browserBridge?.bind(sinkLive)
   const threadTools = parseThreadTools(options.threadTools)
   const threadsBridge = threadTools === undefined ? options.threads?.bridge : new ThreadsBridge()
+  made.push(() => threadsBridge?.close())
   const threadsEndpoint = threadTools?.mcpCommand === undefined ? undefined : await createThreadsEndpoint(threadTools.mcpCommand)
+  made.push(() => threadsEndpoint?.remove())
   threadsBridge?.bind(sinkLive)
   const computerTools = parseComputerTools(options.computerTools)
   const computerBridge = computerTools === undefined ? options.computer?.bridge : new ComputerBridge()
+  made.push(() => computerBridge?.close())
   const computerEndpoint = computerTools?.mcpCommand === undefined ? undefined : await createComputerEndpoint(computerTools.mcpCommand)
+  made.push(() => computerEndpoint?.remove())
   computerBridge?.bind(sinkLive)
   const imageTools = parseImageTools(options.imageTools)
   const imageService = imageTools === undefined ? undefined : new ImageService()
   const imagesToken = randomBytes(32).toString("hex")
   const imagesEndpoint = imageTools?.mcpCommand === undefined ? undefined : await createImagesEndpoint(imageTools.mcpCommand)
+  made.push(() => imagesEndpoint?.remove())
   const connectorSetup = options.connectorsFile === undefined ? undefined : new ConnectorSetupStore(options.connectorsFile)
   const githubCommand = options.githubCli === false ? undefined : (options.githubCli ?? "gh")
   // The vault opens with the native runtime below; a key is read only when a call is made.
@@ -333,29 +361,18 @@ export async function startRunrailControlRpcServer(
   const builtConnectors = options.connectorRegistry === undefined && connectorSetup !== undefined ? buildConnectorRegistry(await connectorSetup.read(), { resolve: (kind) => connectorSecret(kind, secretVault.vault, githubCommand) }) : undefined
   const connectorsToken = randomBytes(32).toString("hex")
   const connectorsEndpoint = builtConnectors !== undefined && builtConnectors.list().length > 0 && options.connectorTools?.mcpCommand !== undefined ? await createConnectorsEndpoint(options.connectorTools.mcpCommand) : undefined
-  let controller: RunrailSessionController
-  try {
-    controller = await timed("session", () => RunrailSessionController.create({
-      ...options,
-      onLive: sinkLive,
-      ...(options.pluginManager === undefined ? {} : { pluginHost: options.pluginManager.host }),
-      ...(browserTools === undefined ? {} : { browser: { bridge: browserBridge as BrowserBridge, ...(browserEndpoint === undefined ? {} : { mcpConfig: browserEndpoint.mcpConfig }) } }),
-      ...(threadTools === undefined ? {} : { threads: { bridge: threadsBridge as ThreadsBridge, ...(threadsEndpoint === undefined ? {} : { mcpConfig: threadsEndpoint.mcpConfig }) } }),
-      ...(computerTools === undefined ? {} : { computer: { bridge: computerBridge as ComputerBridge, ...(computerEndpoint === undefined ? {} : { mcpConfig: computerEndpoint.mcpConfig }) } }),
-      ...(imageService === undefined ? {} : { images: { service: imageService, ...(imagesEndpoint === undefined ? {} : { mcpConfig: imagesEndpoint.mcpConfig }) } }),
-      ...(builtConnectors === undefined ? {} : { connectors: { registry: builtConnectors, ...(connectorsEndpoint === undefined ? {} : { mcpConfig: connectorsEndpoint.mcpConfig }) } }),
-    }, options.toolConnection))
-  } catch (error) {
-    browserBridge?.close()
-    await browserEndpoint?.remove()
-    threadsBridge?.close()
-    await threadsEndpoint?.remove()
-    computerBridge?.close()
-    await computerEndpoint?.remove()
-    await imagesEndpoint?.remove()
-    await connectorsEndpoint?.remove()
-    throw error
-  }
+  made.push(() => connectorsEndpoint?.remove())
+  const controller = await timed("session", () => RunrailSessionController.create({
+    ...options,
+    onLive: sinkLive,
+    ...(options.pluginManager === undefined ? {} : { pluginHost: options.pluginManager.host }),
+    ...(browserTools === undefined ? {} : { browser: { bridge: browserBridge as BrowserBridge, ...(browserEndpoint === undefined ? {} : { mcpConfig: browserEndpoint.mcpConfig }) } }),
+    ...(threadTools === undefined ? {} : { threads: { bridge: threadsBridge as ThreadsBridge, ...(threadsEndpoint === undefined ? {} : { mcpConfig: threadsEndpoint.mcpConfig }) } }),
+    ...(computerTools === undefined ? {} : { computer: { bridge: computerBridge as ComputerBridge, ...(computerEndpoint === undefined ? {} : { mcpConfig: computerEndpoint.mcpConfig }) } }),
+    ...(imageService === undefined ? {} : { images: { service: imageService, ...(imagesEndpoint === undefined ? {} : { mcpConfig: imagesEndpoint.mcpConfig }) } }),
+    ...(builtConnectors === undefined ? {} : { connectors: { registry: builtConnectors, ...(connectorsEndpoint === undefined ? {} : { mcpConfig: connectorsEndpoint.mcpConfig }) } }),
+  }, options.toolConnection))
+  made.push(() => controller.close("control server failed"))
   live.bind(controller.session.snapshot.id)
   // The live conversation view spans backend and provider switches for this process only.
   const conversation = new ConversationBuilder({ maxItems: LIVE_CONVERSATION_ITEMS, maxTextBytes: LIVE_CONVERSATION_TEXT_BYTES, root: controller.session.policy.root })
@@ -382,6 +399,7 @@ export async function startRunrailControlRpcServer(
     ...(options.maxTasks === undefined ? {} : { maxTasks: options.maxTasks }),
     ...(options.maxEventsPerTask === undefined ? {} : { maxEventsPerTask: options.maxEventsPerTask }),
   })
+  made.push(() => nativeRuntime.signIn?.close())
   secretVault.vault = nativeRuntime.vaultBroker?.vault
   imageService?.bind({
     choice: async () => {
@@ -434,7 +452,7 @@ export async function startRunrailControlRpcServer(
     workflowRuns: new WorkflowRuns({
       root: workspaceRoot,
       store: workflows,
-      project: projectKey(workspaceRoot),
+      project: await resolveProjectKey(workspaceRoot),
       setups: { get: (id) => setups.runnable(id) },
       setupRuns,
       createWorktree: async ({ id, pr }) => {
@@ -581,9 +599,11 @@ export async function startRunrailControlRpcServer(
       "session.rewind": controller.session.checkpoints === undefined || controller.session.transcriptStore?.truncate === undefined ? "configurable" : "available",
       "thread.copy": options.threadsDir === undefined ? "configurable" : "available",
       push: "available",
+      // Local, content-free share references. Payload-bearing shares are refused and grants are recorded, not enforced.
+      sharing: "available",
     },
   })
-  let listener: ReturnType<typeof Bun.serve> | undefined
+  let listener: ReturnType<typeof Bun.serve>
   let stopped = false
   try {
     listener = Bun.serve({
@@ -601,15 +621,6 @@ export async function startRunrailControlRpcServer(
       },
     })
   } catch (error) {
-    browserBridge?.close()
-    await browserEndpoint?.remove()
-    threadsBridge?.close()
-    await threadsEndpoint?.remove()
-    computerBridge?.close()
-    await computerEndpoint?.remove()
-    await imagesEndpoint?.remove()
-    await connectorsEndpoint?.remove()
-    await controller.close("control server failed")
     throw new ControlRpcError(
       "CONTROL_SERVER_START_FAILED",
       500,
@@ -662,28 +673,34 @@ export async function startRunrailControlRpcServer(
       async stop(): Promise<void> {
         if (stopped) return
         stopped = true
-        for (const close of [...services.streams]) close()
-        browserBridge?.close()
-        await browserEndpoint?.remove().catch(() => undefined)
-        threadsBridge?.close()
-        await threadsEndpoint?.remove().catch(() => undefined)
-        computerBridge?.close()
-        await computerEndpoint?.remove().catch(() => undefined)
-        await imagesEndpoint?.remove().catch(() => undefined)
-        await connectorsEndpoint?.remove().catch(() => undefined)
-        // A sign-in left waiting would keep its callback port open after the engine is gone.
-        await nativeRuntime.signIn?.close()
-        await services.logins.dispose()
-        await services.workflowRuns.close()
-        await services.evalRuns.close()
-        await services.memory.service?.close()
-        await services.setupRuns.close()
-        await services.checks.close()
-        // Stop listening first, then end the session: a call held open by a turn answers once the turn ends.
-        const drained = server.stop()
-        await controller.close("control server stopped")
-        await drained
-        await options.pluginManager?.close()
+        // Every part is closed even when one fails, so a failure never leaves the listener or the session running.
+        let drained: Promise<void> | undefined
+        const failures = await settleAll([
+          ...[...services.streams],
+          () => browserBridge?.close(),
+          () => browserEndpoint?.remove().catch(() => undefined),
+          () => threadsBridge?.close(),
+          () => threadsEndpoint?.remove().catch(() => undefined),
+          () => computerBridge?.close(),
+          () => computerEndpoint?.remove().catch(() => undefined),
+          () => imagesEndpoint?.remove().catch(() => undefined),
+          () => connectorsEndpoint?.remove().catch(() => undefined),
+          // A sign-in left waiting would keep its callback port open after the engine is gone.
+          () => nativeRuntime.signIn?.close(),
+          () => services.logins.dispose(),
+          () => services.workflowRuns.close(),
+          () => services.evalRuns.close(),
+          () => services.memory.service?.close(),
+          () => services.setupRuns.close(),
+          () => services.checks.close(),
+          // Stop listening first, then end the session: a call held open by a turn answers once the turn ends.
+          () => { drained = server.stop() },
+          () => controller.close("control server stopped"),
+          () => drained,
+          () => options.pluginManager?.close(),
+        ])
+        if (failures.length === 1) throw failures[0]
+        if (failures.length > 1) throw new AggregateError(failures, "control server: some parts failed to stop")
       },
     },
   }
@@ -923,11 +940,20 @@ function createEventStreamResponse(
       })
       // Headers leave with the first bytes, so a stream with nothing to replay still has to open at once.
       streamController.enqueue(encoder.encode(": open\n\n"))
-      for (const event of initial) send(presentControlEvent(event, { root: controller.session.policy.root }))
+      // `maxEvents` is the size of each replay step, not of the replay: every retained event after the
+      // cursor goes out before the stream turns live, or the ones past the first step would be skipped.
+      // Nothing is published while this runs, so the window cannot move under it.
+      for (let batch = initial; batch.length > 0 && !closed;) {
+        for (const event of batch) send(presentControlEvent(event, { root: controller.session.policy.root }))
+        batch = batch.length < maxEvents ? [] : controller.eventsSince(batch.at(-1)!.seq, maxEvents)
+      }
       let lastLive = afterLiveSeq
-      for (const frame of initialLive) {
-        send(frame, "runrail.live")
-        lastLive = frame.liveSeq
+      for (let batch = initialLive; batch.length > 0 && !closed;) {
+        for (const frame of batch) {
+          send(frame, "runrail.live")
+          lastLive = frame.liveSeq
+        }
+        batch = batch.length < maxEvents ? [] : replayLiveFrames(live, lastLive, maxEvents)
       }
       replaying = false
       for (const event of pending.splice(0)) send(presentControlEvent(event, { root: controller.session.policy.root }))
@@ -1137,6 +1163,7 @@ async function dispatch(
     case "account.create": {
       rejectRawCredentialFields(params)
       const parsed = parseRpcAccountRecord(params)
+      refuseCallerShellKey(parsed.reference)
       await nativeRuntime.connections.requireFreeForAccount(parsed.reference.accountId)
       refuseKeyOnSignInOnly(parsed)
       await requireSameDestination(nativeRuntime, parsed)
@@ -1229,7 +1256,7 @@ async function dispatch(
       const task = await nativeRuntime.taskKernel.snapshot(requireNativeId(params.taskId, "task id", 128))
       requireTaskScope(task, nativeRuntime, controller)
       const payload = parseRpcSharePayload(params.payload)
-      if (payload.kind !== "none") throw new ControlRpcError("SHARE_CRYPTO_REQUIRED", 409, "payload-bearing shares require an encrypted payload reference")
+      if (payload.kind !== "none") throw new ControlRpcError("SHARE_CRYPTO_REQUIRED", 409, "only content-free shares are available: this engine does not encrypt share payloads")
       const share = createShareReference({
         taskId: task.taskId,
         ownerId: nativeRuntime.ownerId,
@@ -1532,16 +1559,17 @@ async function dispatch(
     case "turn.steer": {
       // A caller that resends after a lost answer names the message; the same key gets the first answer, not a second turn.
       const key = params.idempotencyKey === undefined ? undefined : `${method}:${requireNativeId(params.idempotencyKey, "idempotencyKey", 256)}`
-      const answers = turnAnswers.get(controller) ?? new Map<string, Promise<unknown>>()
+      const answers = turnAnswers.get(controller) ?? new Map<string, Promise<TurnAnswer>>()
       turnAnswers.set(controller, answers)
       const earlier = key === undefined ? undefined : answers.get(key)
       if (earlier !== undefined) return earlier
       const answer = answerTurn(method, params, controller, services)
       if (key !== undefined) {
         if (answers.size >= MAX_TURN_KEYS) answers.delete(answers.keys().next().value as string)
-        answers.set(key, answer)
+        const kept = answer.then(keptTurnAnswer)
+        answers.set(key, kept)
         // A refused message may be sent again under the same key.
-        answer.catch(() => answers.delete(key))
+        kept.catch(() => answers.delete(key))
       }
       return answer
     }
@@ -2054,8 +2082,9 @@ async function connectorSetupList(services: ControlServices, vault: CredentialVa
   const settings = await requireConnectorSetup(services).read()
   const connectors = await Promise.all(CONNECTOR_KINDS.map(async (kind) => {
     const setting = settings[kind]
+    // The signed-in account name, read from gh's own config: no token is read and nothing goes over the network.
     const connected = kind === "github"
-      ? services.githubCli !== undefined && (await runGitHubCli({ command: services.githubCli, cwd: homedir() }, ["auth", "token"], { maxOutput: 4_096 }).then((answer) => answer.text.trim().length > 0, () => false))
+      ? services.githubCli !== undefined && (await runGitHubCli({ command: services.githubCli, cwd: homedir() }, ["config", "get", "-h", "github.com", "user"], { maxOutput: 4_096 }).then((answer) => answer.text.trim().length > 0, () => false))
       : (await vault?.get(connectorSecretId(kind)).catch(() => undefined))?.kind === "api-key"
     return { id: kind, name: CONNECTOR_NAMES[kind], on: setting?.on === true, connected, signIn: kind === "github" ? "gh" : "key", ...(setting?.site === undefined ? {} : { site: setting.site }), ...(setting?.email === undefined ? {} : { email: setting.email }) }
   }))
@@ -2212,7 +2241,22 @@ async function refuseStoredCredentialOnCallerEndpoint(runtime: NativeControlRunt
   if (environment === undefined) return
   const provider = parseScalarEnum(params.provider, ["openai", "anthropic", "openai-compatible", "xai"], "provider")
   const endpoint = params.endpoint === undefined ? undefined : requireBoundedString(params.endpoint, "endpoint", 2_048)
-  if (provider !== undefined && !keyVariableAllowedAt(environment, providerDestination(provider, endpoint))) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "this key belongs to another provider's address")
+  if (provider !== undefined && !callerKeyVariableAllowedAt(environment, providerDestination(provider, endpoint))) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, KEY_VARIABLE_REFUSED)
+}
+
+const KEY_VARIABLE_REFUSED = "this key variable goes only to its own provider's address, or to a server on this machine when no provider owns it"
+
+/**
+ * A shell variable no preset owns is read for an account only when the account points at this
+ * machine. A vendor's own variable is held to that vendor when the connection resolves, and an
+ * account with no address never resolves, so neither is checked here.
+ */
+function refuseCallerShellKey(reference: AccountRecord["reference"]): void {
+  if (reference.authMode !== "environment" && reference.authMode !== "api-key-reference") return
+  const name = reference.environmentName
+  if (name === undefined || PROVIDER_PRESETS.some((preset) => preset.environment === name)) return
+  const address = reference.baseUrl ?? getProviderPreset(connectionPresetId(reference))?.baseUrl
+  if (address !== undefined && !callerKeyVariableAllowedAt(name, address)) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, KEY_VARIABLE_REFUSED)
 }
 
 /** The address a provider request reaches once its family's default fills an omitted endpoint. */
@@ -3504,7 +3548,7 @@ function parseProviderDiscovery(params: Record<string, unknown>, credentialResol
   const environment = params.credentialEnvironment === undefined ? defaultCredentialEnvironment(provider) : requireBoundedString(params.credentialEnvironment, "credentialEnvironment", 128)
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(environment) || !isModelKeyVariable(environment)) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "credentialEnvironment must name a model key variable")
   const endpoint = params.endpoint === undefined ? undefined : requireBoundedString(params.endpoint, "endpoint", 2_048)
-  if (accountId === undefined && !keyVariableAllowedAt(environment, providerDestination(provider, endpoint))) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "this key belongs to another provider's address")
+  if (accountId === undefined && !callerKeyVariableAllowedAt(environment, providerDestination(provider, endpoint))) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, KEY_VARIABLE_REFUSED)
   const allowRemote = optionalBoolean(params.allowRemote)
   const allowInsecureRemote = optionalBoolean(params.allowInsecureRemote)
   const protocol = parseScalarEnum(params.protocol, ["responses", "chat"], "protocol")
@@ -3869,7 +3913,7 @@ async function setupRpc(services: ControlServices, method: string, params: Recor
 
 /** Workflows: this project's, every project's for the app's scheduler, and runs of them here. */
 async function workflowRpc(services: ControlServices, root: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-  const project = projectKey(root)
+  const project = await resolveProjectKey(root)
   const id = (): string => (typeof params.id === "string" && params.id.length <= 64 ? params.id : invalid("id is required"))
   const runId = (): string => (typeof params.runId === "string" && params.runId.length <= 80 ? params.runId : invalid("runId is required"))
   // A setup step names a setup this project can run.
@@ -4435,19 +4479,74 @@ function parseOptionalBound(value: unknown, min: number, max: number, name: stri
   return value
 }
 
-/** Replays retained live frames after a cursor; an expired cursor restarts at the oldest retained frame. */
-async function answerTurn(method: "turn.enqueue" | "turn.steer", params: Record<string, unknown>, controller: RunrailSessionController, services: ControlServices): Promise<unknown> {
+interface TurnAnswer {
+  readonly steered?: boolean
+  readonly events: readonly unknown[]
+  readonly live: readonly RunrailLiveFrame[]
+  /** Older events and frames left out to keep the answer within its byte limit. */
+  readonly omittedEvents?: number
+  readonly omittedLive?: number
+}
+
+async function answerTurn(method: "turn.enqueue" | "turn.steer", params: Record<string, unknown>, controller: RunrailSessionController, services: ControlServices): Promise<TurnAnswer> {
   const parsed = parseControlInput(params)
   // D14: the person's message carries the memories it recalls, whatever route reads it.
   const input = method === "turn.enqueue" && params.recall === true ? await withRecall(services.memory.open(), parsed) : parsed
   const liveOnly = method === "turn.steer" && optionalBoolean(params.liveOnly) === true
   const liveCursor = services.live.lastLiveSeq
   // Running turn only: an answer at once, and nothing queued when the turn cannot take it.
-  if (liveOnly) return { steered: await controller.steerLive(input), events: [], live: replayLiveFrames(services.live, liveCursor, MAX_TURN_LIVE_FRAMES) }
+  if (liveOnly) return boundedTurnAnswer({ steered: await controller.steerLive(input), events: [], live: replayLiveFrames(services.live, liveCursor, MAX_TURN_LIVE_FRAMES) }, MAX_TURN_ANSWER_BYTES)
   const events = method === "turn.enqueue" ? await controller.enqueue(input) : await controller.steer(input)
-  return { events: events.map((event) => presentControlEvent(event, { root: controller.session.policy.root })), live: replayLiveFrames(services.live, liveCursor, MAX_TURN_LIVE_FRAMES) }
+  return boundedTurnAnswer({ events: events.map((event) => presentControlEvent(event, { root: controller.session.policy.root })), live: replayLiveFrames(services.live, liveCursor, MAX_TURN_LIVE_FRAMES) }, MAX_TURN_ANSWER_BYTES)
 }
 
+/** The newest events, then the newest live frames, that fit in `maxBytes`; what is left out is counted. */
+function boundedTurnAnswer(answer: TurnAnswer, maxBytes: number): TurnAnswer {
+  // Room for the envelope and the counts around the items.
+  let budget = maxBytes - 256
+  const newest = <T>(items: readonly T[]): readonly T[] => {
+    let start = items.length
+    while (start > 0) {
+      const bytes = Buffer.byteLength(JSON.stringify(items[start - 1]) ?? "null", "utf8") + 1
+      if (bytes > budget) break
+      budget -= bytes
+      start -= 1
+    }
+    return start === 0 ? items : items.slice(start)
+  }
+  const events = newest(answer.events)
+  const live = newest(answer.live)
+  const omittedEvents = (answer.omittedEvents ?? 0) + answer.events.length - events.length
+  const omittedLive = (answer.omittedLive ?? 0) + answer.live.length - live.length
+  return {
+    ...(answer.steered === undefined ? {} : { steered: answer.steered }),
+    events,
+    live,
+    ...(omittedEvents === 0 ? {} : { omittedEvents }),
+    ...(omittedLive === 0 ? {} : { omittedLive }),
+  }
+}
+
+/** What a repeated key gets: the first answer when it is small, else its newest events alone, within the kept limit. */
+function keptTurnAnswer(answer: TurnAnswer): TurnAnswer {
+  if (Buffer.byteLength(JSON.stringify(answer), "utf8") <= MAX_KEPT_TURN_ANSWER_BYTES) return answer
+  return boundedTurnAnswer({ ...answer, live: [], omittedLive: (answer.omittedLive ?? 0) + answer.live.length }, MAX_KEPT_TURN_ANSWER_BYTES)
+}
+
+/** Runs each step in order whatever the ones before it did, and returns what failed. */
+async function settleAll(steps: readonly (() => unknown)[]): Promise<unknown[]> {
+  const failures: unknown[] = []
+  for (const step of steps) {
+    try {
+      await step()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  return failures
+}
+
+/** Replays retained live frames after a cursor; an expired cursor restarts at the oldest retained frame. */
 function replayLiveFrames(live: LiveFrameHub, afterLiveSeq: number, maxFrames: number): readonly RunrailLiveFrame[] {
   try {
     return live.since(afterLiveSeq, maxFrames)
@@ -4506,10 +4605,12 @@ function validateServerOptions(
 }
 
 /**
- * A browser page never reaches the control plane: it would send an Origin, and a DNS-rebound
- * name in Host. Runrail's own clients send neither, and only `/health` is open without the token.
+ * Why a request from a browser page, or one naming a host other than this machine, is refused;
+ * undefined when it is not. A browser page never reaches the control plane: it would send an
+ * Origin, and a DNS-rebound name in Host. Runrail's own clients send neither, and only `/health`
+ * is open without the token.
  */
-function refusedPlace(request: Request, allowRemote: boolean): string | undefined {
+export function refusedPlace(request: Request, allowRemote: boolean): string | undefined {
   if (request.headers.get("origin") !== null) return "CONTROL_ORIGIN_REFUSED"
   if (allowRemote) return undefined
   const host = request.headers.get("host") ?? ""

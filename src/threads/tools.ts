@@ -31,7 +31,7 @@ export const THREADS_TOOL_SPECS: readonly ThreadsToolSpec[] = Object.freeze([
     name: "send_to_thread",
     action: "send",
     description:
-      "Send a message to another thread, which runs it as its next turn with its own access settings, so anything it needs approved still asks the person there. With wait, this call returns that thread's reply when its turn ends (up to 15 minutes). Use it to hand work to a thread that owns it, for example asking a thread that runs the tests to run them.",
+      "Send a message to another thread, which runs it as its next turn. It is delivered only to a thread on the same access as this one (Plan, Ask, Auto-edit, Auto, or Full access); otherwise it is refused and that thread shows the person why. With wait, this call returns that thread's reply when its turn ends (up to 15 minutes). Use it to hand work to a thread that owns it, for example asking a thread that runs the tests to run them.",
     inputSchema: object({ thread: THREAD, message: { type: "string", maxLength: MAX_THREAD_MESSAGE }, wait: { type: "boolean", description: "Wait for that thread's reply." } }, ["thread", "message"]),
   },
 ])
@@ -49,7 +49,7 @@ export function threadsResultText(action: ThreadsAction, input: unknown, result:
   return result.text.length > 0 ? result.text : "Done."
 }
 
-/** Runrail's own loop. Sending runs without asking: the other thread asks for what it does. */
+/** Runrail's own loop. Sending runs without asking: the desktop delivers only to a thread on the same access. */
 export function createThreadsTools(bridge: ThreadsBridge): readonly NativeTool[] {
   return THREADS_TOOL_SPECS.map((spec) => ({
     name: spec.name,

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import type { AgentEvent } from "@nifrajs/agent-protocol"
+import { ReplayBackend } from "@nifrajs/coding-agent"
+import { BrowserBridge } from "../../src/browser/bridge.ts"
 import { RunrailSessionController } from "../../src/control.ts"
 import { startRunrailControlRpcServer } from "../../src/control-server.ts"
 
@@ -82,6 +84,36 @@ describe("Runrail control event stream", () => {
     }
   })
 
+  test("replays every retained event past the cursor in maxEvents steps before going live", async () => {
+    const cwd = await mkdtemp(join("/tmp", "runrail-control-events-"))
+    const token = "control-events-test-token-123"
+    const running = await startRunrailControlRpcServer({ cwd, backend: "native", authToken: token, loadExtensions: false, model: { complete: () => ({ type: "text", text: "replayed" }) } })
+    const seqs = async (query: string): Promise<number[]> => {
+      const response = await fetch(`${running.handle.url}/events?${query}`, { headers: { authorization: `Bearer ${token}` } })
+      const reader = response.body!.getReader()
+      let text = ""
+      while ((text.match(/"type":"session\.completed"/g) ?? []).length < 3) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        text += new TextDecoder().decode(chunk.value)
+      }
+      await reader.cancel()
+      return [...text.matchAll(/event: runrail\.event\nid: (\d+)/g)].map((match) => Number(match[1]))
+    }
+    try {
+      for (const message of ["one", "two", "three"]) {
+        const turn = await fetch(`${running.handle.url}/rpc`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ method: "turn.enqueue", params: { message } }) })
+        expect(turn.status).toBe(200)
+      }
+      const all = await seqs("afterSeq=-1&maxEvents=4096")
+      expect(all.length).toBeGreaterThan(6)
+      expect(await seqs("afterSeq=-1&maxEvents=2")).toEqual(all)
+      expect(await seqs(`afterSeq=${String(all[1])}&maxEvents=3`)).toEqual(all.slice(2))
+    } finally {
+      await running.handle.stop()
+    }
+  })
+
   test("opens at once when there is nothing to replay", async () => {
     const cwd = await mkdtemp(join("/tmp", "runrail-control-events-"))
     const token = "control-events-test-token-123"
@@ -110,6 +142,40 @@ describe("Runrail control event stream", () => {
     await reader?.read()
     await running.handle.stop()
     expect((await reader?.read())?.done).toBe(true)
+  })
+
+  test("a part that fails to stop leaves neither the listener nor the session running", async () => {
+    const cwd = await mkdtemp(join("/tmp", "runrail-control-events-"))
+    const token = "control-events-test-token-123"
+    const bridge = new BrowserBridge({ anySite: false })
+    bridge.close = () => { throw new Error("bridge close failed") }
+    const running = await startRunrailControlRpcServer({ cwd, backend: "native", authToken: token, loadExtensions: false, browser: { bridge }, model: { complete: () => ({ type: "text", text: "done" }) } })
+    expect((await fetch(`${running.handle.url}/health`)).status).toBe(200)
+    await expect(running.handle.stop()).rejects.toThrow("bridge close failed")
+    await expect(fetch(`${running.handle.url}/health`)).rejects.toThrow()
+    await expect(running.controller.enqueue("after stop")).rejects.toThrow("controller is closed")
+    await expect(running.handle.stop()).resolves.toBeUndefined()
+  })
+
+  test("a startup that fails after the session opened closes the session and its bridges", async () => {
+    const cwd = await mkdtemp(join("/tmp", "runrail-control-events-"))
+    const backend = new ReplayBackend({ events: [] })
+    const closeBackend = backend.close.bind(backend)
+    let sessionsClosed = 0
+    backend.close = async (sessionId) => { sessionsClosed += 1; await closeBackend(sessionId) }
+    const bridge = new BrowserBridge({ anySite: false })
+    let bridgesClosed = 0
+    bridge.close = () => { bridgesClosed += 1 }
+    await expect(startRunrailControlRpcServer({
+      cwd,
+      backend: "fixture",
+      adapter: { name: "fixture", version: "1.0.0", capabilities: ["sessions"], create: () => backend },
+      loadExtensions: false,
+      browser: { bridge },
+      nativeOwnerId: "not a valid owner id",
+    })).rejects.toThrow()
+    expect(sessionsClosed).toBe(1)
+    expect(bridgesClosed).toBe(1)
   })
 
   test("stops while a call is held open by a running turn", async () => {

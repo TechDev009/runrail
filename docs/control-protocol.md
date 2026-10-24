@@ -153,10 +153,17 @@ Important control method families include:
   routes that never take guidance mid-turn) nothing is queued: it answers
   `{ steered, events: [], live }` at once, and `steered: false` leaves the
   message with the caller. A `liveOnly` that is not a boolean answers
-  `CONTROL_INVALID_INPUT`. Both take an optional `idempotencyKey` (a native
+  `CONTROL_INVALID_INPUT`. An answer carries at most the turn's newest 4096
+  events and fits in 4 MiB: older events, then older live frames, are left
+  out and counted in `omittedEvents` and `omittedLive`, which appear only when
+  something was left out. The whole turn stays readable through `/events` and
+  `session.conversation.read`. Both take an optional `idempotencyKey` (a native
   id, at most 256 characters): a call that repeats a key the session saw
-  among its last 256 gets the first call's answer and starts nothing; a key
-  whose first call failed may be used again.
+  among its last 256 starts nothing and gets the first call's answer when it
+  is at most 16 KiB; a larger one is repeated as its newest events within
+  16 KiB, with no live frames and the rest counted in `omittedEvents` and
+  `omittedLive`, so the turn's outcome is still there. A key whose first call
+  failed may be used again.
 - `approval.resolve` with `approvalId`, `approved`, optional `reason`, and
   optional `scope` (`once`, the default, or `session`; capability
   `approval.scope`). `session` also covers the rest of the session on a route
@@ -333,7 +340,8 @@ Important control method families include:
   `usage.read` is
 - `claude.sdk.status` and `claude.sdk.install` when `claude.sdk` is available
 - provider, harness, plugin, connector, account, package, share, skill, and
-  metrics methods when their capability is advertised
+  metrics methods when their capability is advertised (for `sharing`, what
+  that covers today is in the notes below)
 
 Notes on some of these:
 
@@ -341,6 +349,14 @@ Notes on some of these:
   leaves the skill out of its skill catalog or has it back, and `skill_read`
   refuses a switched-off skill. A failed context rebuild undoes the switch and
   answers `CONTROL_INVALID_INPUT`.
+- `sharing` covers local, content-free share references only: `share.create`
+  with payload `none` (any other payload answers `SHARE_CRYPTO_REQUIRED`, 409,
+  since no encryption is implemented), `share.list`, `share.get`,
+  `share.bundle`, `share.advance`, `share.revoke`, and `share.events` for the
+  owner. The `mode` is recorded on the reference and changes nothing else.
+  `share.grant` and `share.grants` record grants for a future host service;
+  nothing reads them, so no grant lets anyone in. The control token is the only
+  identity, and it acts as the owner. See [Sharing](sharing.md).
 - With `skills.invoke`, a `turn.enqueue` or `turn.steer` message object may
   carry `skills`: up to 8 skill ids whose bodies go with that turn. A
   malformed list answers `CONTROL_INVALID_INPUT`; an unknown or switched-off
@@ -583,9 +599,12 @@ otherwise. The tools:
 - `list_threads`: the threads the agent may reach, as the desktop lists them.
 - `read_thread {thread}`: what the person asked there and its latest reply.
 - `send_to_thread {thread, message, wait?}`: queues `message` (at most 8000
-  characters) as that thread's next turn. It runs with that thread's own
-  access settings, so anything it needs approved asks the person there. With
-  `wait`, the call returns that thread's reply when its turn ends.
+  characters) as that thread's next turn. The desktop delivers it only to a
+  thread on the same access as the sender (Plan, Ask, Auto-edit, Auto, or Full
+  access), so an agent never reaches past its own approvals through another
+  thread; otherwise the call is refused with `THREADS_DENIED` and that thread
+  shows the person what was asked and why it did not run. With `wait`, the
+  call returns that thread's reply when its turn ends.
 
 `thread` is an id from `list_threads` or an exact title (at most 256
 characters). None of the tools asks before it runs. What `read_thread`
@@ -806,7 +825,12 @@ nothing to the session journal.
 
 `/events` is an authenticated Server-Sent Events stream of live
 `AgentEvent` values. It accepts `afterSeq` and bounded `maxEvents` query
-parameters. The stream opens with a comment line even when there is nothing to
+parameters. On connect it replays every retained event after `afterSeq`, read
+`maxEvents` at a time (default 512, at most 4096), and only then turns live, so
+no retained event between the cursor and the live tail is skipped. Live frames
+replay the same way after `afterLiveSeq`. A client that stops reading is
+disconnected once it is far behind and reconnects from its last cursor. The
+stream opens with a comment line even when there is nothing to
 replay, and keep-alive comments are emitted periodically. It stays open until
 the client disconnects or the server stops. The stream is
 process-local and retained only in a bounded in-memory window. Its replay
@@ -1051,6 +1075,15 @@ Where a credential may go is fixed by these rules:
 - An environment variable that a preset names (for example `OPENAI_API_KEY`)
   is only sent to that preset. Pointing it at a custom address or another
   preset is refused.
+- A variable no preset names (any other `*_API_KEY`) is read for an RPC
+  caller only when its destination is this machine (`localhost`, `127.x`, or
+  `[::1]`): the caller-named `provider.select`, `provider.discover`, and
+  `model.discover`, with `credentialEnvironment` or an environment-mode
+  `accountId`, and `account.create` or `account.upsert` with `authMode`
+  `environment` or `api-key-reference`. Any other destination is refused with
+  `CONTROL_INVALID_INPUT` (400) before anything is sent or stored. The CLI's
+  `--provider-credential-env` is the person's own choice and is not limited
+  this way.
 - A redirect from a provider endpoint is refused, not followed.
 - The older forms of `provider.select`, `provider.discover`, and
   `model.discover`, where the caller names the endpoint, refuse an `accountId`
@@ -1062,7 +1095,7 @@ A connection that breaks one of these rules fails with
 connection without an address fails with `CONTROL_CONNECTION_INVALID` (400).
 
 The older caller-named form still sends an environment-mode credential to the
-endpoint the caller names. A host that exposes `/rpc` to a web view should
+endpoint the caller names, within the rules above. A host that exposes `/rpc` to a web view should
 route every provider choice through `connectionId` and not forward the older
 params.
 

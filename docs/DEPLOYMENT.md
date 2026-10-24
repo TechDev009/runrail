@@ -13,9 +13,13 @@ bun run src/cli.ts control --backend native --cwd /workspace --port 0
 ```
 
 Use `LOOPBACK_HOSTING_PROFILE` or `createHostingProfile` to describe the
-embedding deployment. Loopback HTTP is acceptable when the listener is not
-exposed beyond the host, but the bearer-authenticated control surface remains
-required.
+embedding deployment. A profile is a checked description only:
+`startRunrailControlRpcServer` does not take or read one. The server's own
+`hostname`, `port`, `allowRemote`, `tls`, `authToken`, and `maxBodyBytes`
+options decide how it listens, so an embedder that validates a profile passes
+the matching values to the server itself. Loopback HTTP is acceptable when the
+listener is not exposed beyond the host, but the bearer-authenticated control
+surface remains required.
 
 For the desktop process contract, readiness parsing, durable event recovery,
 scope rules, credential handling, and the current Bun packaging limitation,
@@ -25,7 +29,8 @@ see [`control-protocol.md`](control-protocol.md) and
 ## Remote or hosted control
 
 An embedding application placing Runrail behind a reverse proxy or container
-ingress must validate an explicit profile before starting the server:
+ingress must validate an explicit profile before starting the server, then
+start the server with the matching options:
 
 ```ts
 const profile = createHostingProfile({
@@ -43,6 +48,12 @@ const profile = createHostingProfile({
 ```
 
 Non-loopback profiles require explicit remote opt-in, TLS, and authentication.
+The control server enforces its own rules whatever the profile says: it binds
+beyond loopback only with `allowRemote: true` and its own `tls` certificate,
+so a `terminated-proxy` profile describes a proxy in front of a loopback
+listener, not a plain-HTTP remote one. The server refuses any request with an
+`Origin`, and without `allowRemote` any whose `Host` is not a loopback name, so
+such a proxy drops `Origin` and forwards a loopback `Host`.
 The surrounding proxy owns identity, authorization, tenancy, rate limits,
 request logging policy, and certificate management. Runrail request bounds do
 not replace proxy authorization.

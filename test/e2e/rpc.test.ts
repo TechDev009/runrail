@@ -19,6 +19,17 @@ describe("Runrail loopback RPC", () => {
       })
       const health = await fetch(`${running.handle.url}/health`)
       expect(health.status).toBe(200)
+      // A browser page, even one on localhost, and a DNS-rebound name are refused before the RPC server sees them.
+      for (const origin of ["http://localhost:3000", "https://evil.example"]) {
+        const fromPage = await fetch(`${running.handle.url}/health`, { headers: { origin } })
+        expect([origin, fromPage.status, fromPage.headers.get("access-control-allow-origin")]).toEqual([origin, 403, null])
+        expect(((await fromPage.json()) as { error: { code: string } }).error.code).toBe("CONTROL_ORIGIN_REFUSED")
+        const preflight = await fetch(`${running.handle.url}/rpc`, { method: "OPTIONS", headers: { origin, "access-control-request-method": "POST" } })
+        expect([preflight.status, preflight.headers.get("access-control-allow-origin")]).toEqual([403, null])
+      }
+      const rebound = await fetch(`${running.handle.url}/rpc`, { method: "POST", headers: { host: "evil.example:80", authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ method: "session.create", params: {} }) })
+      expect([rebound.status, ((await rebound.json()) as { error: { code: string } }).error.code]).toEqual([403, "CONTROL_HOST_REFUSED"])
+      expect((await fetch(`${running.handle.url}/health`, { headers: { host: `localhost:${new URL(running.handle.url).port}` } })).status).toBe(200)
       const unauthorized = await fetch(`${running.handle.url}/rpc`, {
         method: "POST",
         body: JSON.stringify({ method: "session.create", params: {} }),

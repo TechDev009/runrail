@@ -2,7 +2,29 @@
 
 Sharing is a native Runrail protocol, not a Pi feature clone. Local coding
 works without a Host service; hosted collaboration is an optional first-party
-deployable.
+deployable that does not exist yet.
+
+## Available today
+
+Only local, content-free share references work. The control server's
+`sharing` capability means exactly this:
+
+- `share.create` makes a reference to a task: its id, owner, mode, cursor,
+  revision, and expiry, plus a bundle of the task digest and the artifact
+  references the caller names (path, digest, size). No transcript, prompt, or
+  file content goes into either.
+- A payload other than `none` is refused with `SHARE_CRYPTO_REQUIRED` (409).
+  No encryption, key reference, or retention is implemented, so neither
+  `encrypted-invite` payloads nor `artifact-only` encrypted artifacts can be
+  shared. The `mode` is stored on the reference and changes nothing else.
+- `share.advance`, `share.revoke`, `share.bundle`, and `share.events` work
+  for the owner on this machine. The control token is the only identity, and
+  it acts as the owner.
+- `share.grant` stores a grant (subject, role, expiry) and `share.grants`
+  lists them, for the future Host service. Nothing reads them: no check
+  admits or refuses anyone by a grant, so a grant gives no one access.
+
+Everything else below describes the protocol's target, not shipped behavior.
 
 ## Modes
 
@@ -28,5 +50,6 @@ deployable.
 
 `createShareReference`, `advanceShareCursor`, `revokeShare`, and
 `createContentFreeShareBundle` are the local reference primitives. The Host
-protocol will add identity, durable storage, access grants, retention, quotas,
-and audit without changing local task semantics.
+protocol will add identity, durable storage, enforced access grants,
+encrypted payloads, retention, quotas, and audit without changing local task
+semantics.

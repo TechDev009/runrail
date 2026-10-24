@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
-import { mkdir, readFile } from "node:fs/promises"
+import { mkdir, readFile, realpath } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
 import { LocalMemory } from "./local.ts"
 import { McpMemory, parseMcpMemoryConfig, SERVER_MEMORY_PRESET, type McpMemoryConfig } from "./mcp.ts"
 import { MemorySources } from "./sources.ts"
 import { MemoryError, type Memory, type MemoryProvider, type MemoryScope, type RecallHit } from "./types.ts"
+import { GitError } from "../git/errors.ts"
+import { runGit } from "../git/run.ts"
 import { writeFileAtomic } from "../runtime/atomic-write.ts"
 
 /**
@@ -46,34 +48,56 @@ export function projectScope(root: string): MemoryScope {
   return `project:${createHash("sha256").update(projectKey(root)).digest("hex").slice(0, 16)}`
 }
 
+const PROJECT_KEY_ARGS = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"] as const
+const PROJECT_KEY_TIMEOUT_MS = 5_000
+const PROJECT_KEY_MAX_BYTES = 16 * 1024
+
 /**
  * The project a folder belongs to: a thread's worktree counts as the checkout it came from, at the
- * same place inside it, so its thread recalls the project's memories.
+ * same place inside it, so its thread recalls the project's memories. Each folder is asked once per
+ * process; a folder git cannot answer for in time (or at all) is its own project.
  */
-export function projectKey(root: string): string {
-  // Asked on every workflow call; git runs synchronously, so each folder is asked once per process.
+export async function resolveProjectKey(root: string, options: { readonly gitCommand?: string; readonly timeoutMs?: number } = {}): Promise<string> {
   const known = projectKeys.get(root)
   if (known !== undefined) return known
-  const key = readProjectKey(root)
+  let answer: string | undefined
+  try {
+    answer = (await runGit({ cwd: root, args: PROJECT_KEY_ARGS, timeoutMs: options.timeoutMs ?? PROJECT_KEY_TIMEOUT_MS, maxOutputBytes: PROJECT_KEY_MAX_BYTES, ...(options.gitCommand === undefined ? {} : { gitCommand: options.gitCommand }) })).stdout
+  } catch (error) {
+    if (!(error instanceof GitError)) throw error
+  }
+  const real = answer === undefined ? undefined : await realpath(root).catch(() => undefined)
+  return rememberProjectKey(root, answer === undefined || real === undefined ? root : keyFromGit(root, answer, real))
+}
+
+/** `resolveProjectKey` for a caller that cannot wait: git runs synchronously, with the same bounds. */
+export function projectKey(root: string): string {
+  const known = projectKeys.get(root)
+  if (known !== undefined) return known
+  let key = root
+  try {
+    const result = Bun.spawnSync(["git", ...PROJECT_KEY_ARGS], { cwd: root, stdout: "pipe", stderr: "ignore", env: { PATH: process.env.PATH ?? "" }, timeout: PROJECT_KEY_TIMEOUT_MS, maxBuffer: PROJECT_KEY_MAX_BYTES })
+    if (result.exitCode === 0 && result.exitedDueToTimeout !== true && result.exitedDueToMaxBuffer !== true) key = keyFromGit(root, result.stdout.toString(), realpathSync(root))
+  } catch {
+    // No git, or the folder is gone: it is its own project, as when git has no answer.
+  }
+  return rememberProjectKey(root, key)
+}
+
+const projectKeys = new Map<string, string>()
+
+function rememberProjectKey(root: string, key: string): string {
   if (projectKeys.size >= 256) projectKeys.clear()
   projectKeys.set(root, key)
   return key
 }
 
-const projectKeys = new Map<string, string>()
-
-function readProjectKey(root: string): string {
-  try {
-    const result = Bun.spawnSync(["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], { cwd: root, stdout: "pipe", stderr: "ignore", env: { PATH: process.env.PATH ?? "" } })
-    if (result.exitCode !== 0) return root
-    const [top, common] = result.stdout.toString().trim().split("\n")
-    if (top === undefined || common === undefined || basename(common) !== ".git") return root
-    // git answers with real paths; the root may come through a symlink (`/var` on macOS).
-    const inside = relative(top, realpathSync(root))
-    return inside.startsWith("..") ? root : join(dirname(common), inside)
-  } catch {
-    return root
-  }
+function keyFromGit(root: string, answer: string, real: string): string {
+  const [top, common] = answer.trim().split("\n")
+  if (top === undefined || common === undefined || basename(common) !== ".git") return root
+  // git answers with real paths; the root may come through a symlink (`/var` on macOS).
+  const inside = relative(top, real)
+  return inside.startsWith("..") ? root : join(dirname(common), inside)
 }
 
 export class MemoryService {

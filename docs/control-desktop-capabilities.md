@@ -995,7 +995,7 @@ threads started after it.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `connector.setup.list` | none | `{ connectors: [{ id, name, on, connected, signIn: "gh" \| "key", site?, email? }] }`; `connected` is a working `gh` sign-in for GitHub, a key in the vault for the others |
+| `connector.setup.list` | none | `{ connectors: [{ id, name, on, connected, signIn: "gh" \| "key", site?, email? }] }`; `connected` is a working `gh` sign-in for GitHub (the account `gh config get -h github.com user` names, so listing reads no token and makes no network call), a key in the vault for the others |
 | `connector.setup.save` | `{ id, on, site?, email? }` | the setting. Jira needs its `site` (as `your-team.atlassian.net`) and the API token's `email` while it is on |
 | `connector.setup.remove` | `{ id }` | `{ id, removed: true }`; the key is deleted from the vault too |
 

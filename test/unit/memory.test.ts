@@ -5,7 +5,7 @@ import { join, resolve } from "node:path"
 import { McpClient } from "../../src/mcp/client.ts"
 import { LocalMemory } from "../../src/memory/local.ts"
 import { fill, McpMemory, memoriesIn, parseMcpMemoryConfig, SERVER_MEMORY_PRESET } from "../../src/memory/mcp.ts"
-import { MemoryService, projectKey, projectScope, RECALL_FLOOR } from "../../src/memory/service.ts"
+import { MemoryService, projectKey, projectScope, RECALL_FLOOR, resolveProjectKey } from "../../src/memory/service.ts"
 import { chunks, feedItems, MemorySources } from "../../src/memory/sources.ts"
 import { queryTerms, recallScore } from "../../src/memory/types.ts"
 
@@ -342,6 +342,25 @@ describe("the project a folder belongs to", () => {
     expect(projectKey(join(dir, "wt", "app"))).toBe(join(await realpath(repo), "app"))
     expect(projectScope(join(dir, "wt", "app"))).toBe(projectScope(join(await realpath(repo), "app")))
     expect(projectKey(dir)).toBe(dir)
+    expect(await resolveProjectKey(join(dir, "wt"))).toBe(await realpath(repo))
+    expect(await resolveProjectKey(join(dir, "plain"))).toBe(join(dir, "plain"))
+  })
+
+  test("asked without blocking, a git that hangs or floods its output leaves the folder its own project, in bounded time", async () => {
+    const dir = await scratch()
+    const fake = (name: string, answer: string) => {
+      const path = join(dir, name)
+      Bun.spawnSync(["sh", "-c", `printf '%s\\n' '#!/bin/sh' 'case "$*" in *--show-toplevel*) ${answer} ;; *) exec git "$@" ;; esac' > ${path} && chmod +x ${path}`])
+      return path
+    }
+    const hang = fake("hang.sh", "exec sleep 30")
+    const flood = fake("flood.sh", "exec yes /tmp/flood")
+    for (const [gitCommand, folder] of [[hang, "a"], [flood, "b"]] as const) {
+      await mkdir(join(dir, folder))
+      const started = Date.now()
+      expect(await resolveProjectKey(join(dir, folder), { gitCommand, timeoutMs: 300 })).toBe(join(dir, folder))
+      expect(Date.now() - started).toBeLessThan(5_000)
+    }
   })
 })
 

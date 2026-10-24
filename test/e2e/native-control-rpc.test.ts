@@ -72,6 +72,9 @@ describe("native control RPC", () => {
       expect(resolved.body).toMatchObject({ ok: true, result: { accountId: "account-test", resolved: true } })
       expect(JSON.stringify(resolved.body)).not.toContain("secret-value")
 
+      // Only content-free shares exist: an encrypted payload is refused, since nothing here encrypts one.
+      const payload = await rpc(first, "share.create", { taskId: "task-rpc", mode: "encrypted-invite", payload: { kind: "encrypted-transcript", encrypted: true } })
+      expect([payload.response.status, payload.body]).toMatchObject([409, { ok: false, error: { code: "SHARE_CRYPTO_REQUIRED" } }])
       const share = await rpc(first, "share.create", { taskId: "task-rpc", mode: "read-only-live" })
       expect(share.response.status).toBe(200)
       expect(share.body).toMatchObject({ ok: true, result: { share: { status: "active", eventCursor: -1 }, bundle: { artifacts: [] } } })

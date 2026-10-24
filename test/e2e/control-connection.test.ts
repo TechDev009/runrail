@@ -454,8 +454,19 @@ describe("control connections", () => {
       expect([upstream, reply.status, reply.code]).toEqual([upstream, status, code])
       expect(reply.text).not.toContain(SHELL_CANARY)
     }
-    const remote = await discover({ endpoint: "https://relay.example.test/v1" })
-    expect([remote.status, remote.code]).toEqual([400, "PROVIDER_ENDPOINT_DENIED"])
+    // A variable no preset owns is read only for a server on this machine, with remote opt-in or without.
+    for (const extra of [{}, { allowRemote: true }]) {
+      const remote = await discover({ endpoint: "https://relay.example.test/v1", ...extra })
+      expect([remote.status, remote.code]).toEqual([400, "CONTROL_INVALID_INPUT"])
+    }
+    for (const method of ["provider.discover", "model.discover", "provider.select"]) {
+      const sent = await rpc(running, method, { provider: "openai-compatible", model: "chat-model", endpoint: "https://relay.example.test/v1", credentialEnvironment: "STRIPE_API_KEY", allowRemote: true, maxRetries: 0 })
+      expect([method, sent.status, sent.code]).toEqual([method, 400, "CONTROL_INVALID_INPUT"])
+    }
+    expect((await rpc(running, "account.create", { accountId: "conn-stripe", provider: "custom-openai-chat", label: "Relay", authMode: "environment", environmentName: "STRIPE_API_KEY", baseUrl: "https://relay.example.test/v1" })).code).toBe("CONTROL_INVALID_INPUT")
+    expect((await rpc(running, "account.create", { accountId: "conn-stripe", provider: "openrouter", label: "Router", authMode: "api-key-reference", environmentName: "STRIPE_API_KEY" })).code).toBe("CONTROL_INVALID_INPUT")
+    expect((await rpc(running, "account.create", { accountId: "conn-relay-local", provider: "custom-openai-chat", label: "Relay", authMode: "environment", environmentName: SHELL_NAME, baseUrl: endpoint.baseUrl })).status).toBe(200)
+    expect((await rpc(running, "provider.discover", { provider: "openai-compatible", accountId: "conn-relay-local", endpoint: "https://relay.example.test/v1", allowRemote: true, maxRetries: 0 })).code).toBe("CONTROL_INVALID_INPUT")
     // Only a model key variable may be named, and a vendor's own key only goes to that vendor.
     for (const name of ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "HOME"]) expect((await discover({ credentialEnvironment: name })).code).toBe("CONTROL_INVALID_INPUT")
     expect((await discover({ credentialEnvironment: "OPENAI_API_KEY" })).code).toBe("CONTROL_INVALID_INPUT")
