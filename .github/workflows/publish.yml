@@ -1,0 +1,115 @@
+name: Publish
+
+# Publishing a GitHub release (the draft ci.yml makes for a version tag) puts its files on npm and
+# in the Homebrew tap. Nothing is built here: each job takes the release's own files and checks
+# them against its SHA256SUMS.txt. Both jobs run in the `publish` environment, which holds the
+# tap's token; npm takes no token at all (Trusted Publishing, through this workflow's OIDC).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: npm
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      # Trusted Publishing needs npm 11.5.1 or later.
+      - name: Update npm
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      - name: Download the release's package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          mkdir release
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release --pattern "runrail-$version.tgz" --pattern SHA256SUMS.txt
+          (cd release && grep -E "^[0-9a-f]{64}  runrail-${version//./\\.}\.tgz$" SHA256SUMS.txt | sha256sum -c -)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Publish to npm
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if npm view "runrail@$VERSION" version >/dev/null 2>&1; then
+            echo "runrail $VERSION is on npm already"
+            exit 0
+          fi
+          tag=latest
+          if [ "$PRERELEASE" = "true" ]; then tag=next; fi
+          npm publish "release/runrail-$VERSION.tgz" --access public --provenance --tag "$tag"
+
+  # The formula installs the release's executables; a prerelease gets none.
+  homebrew:
+    name: Homebrew formula
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    environment: publish
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+
+      - name: Write the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP" --pattern SHA256SUMS.txt
+          bun scripts/homebrew-formula.ts "${TAG#v}" "$RUNNER_TEMP/SHA256SUMS.txt" > "$RUNNER_TEMP/runrail.rb"
+
+      - name: Check out the tap
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: TechDev009/homebrew-runrail
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Commit the formula
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        working-directory: tap
+        run: |
+          mkdir -p Formula
+          cp "$RUNNER_TEMP/runrail.rb" Formula/runrail.rb
+          git add Formula/runrail.rb
+          if git diff --cached --quiet; then
+            echo "Formula/runrail.rb is current already"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "runrail ${TAG#v}"
+          # The desktop's workflow writes the cask to the same tap.
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "push $attempt failed; rebasing on the tap"
+            git pull --rebase
+          done
+          exit 1

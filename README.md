@@ -46,23 +46,38 @@ the work, and every run stays inside the same rails:
   [desktop app](https://github.com/TechDev009/runrail-desktop) drives), an MCP server, and a
   TypeScript library.
 
-## Quick start
+## Install
 
-Runrail needs [Bun](https://bun.sh) 1.3 or newer and git, on macOS or Linux. Windows is
-experimental.
+On macOS or Linux:
 
 ```sh
-bun add -g https://github.com/TechDev009/runrail/releases/download/v0.1.1/runrail-0.1.1.tgz
-runrail --version
+curl -fsSL https://github.com/TechDev009/runrail/releases/latest/download/install.sh | sh
 ```
 
-Or run it from a checkout, where `bun run src/cli.ts` takes the same arguments as `runrail`:
+It downloads the `runrail` executable for your machine, checks it against the release's
+`SHA256SUMS.txt`, and puts it in `~/.local/bin`, without sudo. Pass `sh -s -- --dir <folder>` for
+another folder or `--version <version>` for another release. Other ways to install it:
+
+| How | Command | Needs |
+| --- | --- | --- |
+| Homebrew | `brew install TechDev009/runrail/runrail` | |
+| npm or Bun | `npm install -g runrail` or `bun add -g runrail` | [Bun](https://bun.sh) 1.3 or newer on your PATH, which runs it |
+| By hand | `runrail-<version>-<platform>.tar.gz` from [Releases](https://github.com/TechDev009/runrail/releases) | |
+| Windows (experimental) | `runrail-<version>-windows-x64.zip` from [Releases](https://github.com/TechDev009/runrail/releases) | |
+
+Runrail also needs git. For Claude Code to ask before it edits a file or runs a command, Runrail
+needs Anthropic's Claude Agent SDK, which it never ships; `runrail sdk install` downloads it from
+npm after asking you (see [the command line reference](docs/cli.md#the-claude-agent-sdk)).
+
+To run it from a checkout, where `bun run src/cli.ts` takes the same arguments as `runrail`:
 
 ```sh
 git clone https://github.com/TechDev009/runrail.git
 cd runrail
 bun install
 ```
+
+## Quick start
 
 Run a task with Claude Code doing the work, through your own Claude Code login:
 
@@ -251,5 +266,5 @@ Runrail is free software under the [GNU Affero General Public License, version 3
 (see [NOTICE](NOTICE)). You may use, modify, and redistribute it for any purpose, including
 commercial work. If you distribute a modified version, or let others use one over a network, you
 must offer them its source under the same license. The Agent SDK is never shipped with Runrail:
-you install it from npm yourself (Runrail says how when it is missing), or Runrail Desktop
-downloads it after you allow it, under Anthropic's own terms.
+`runrail sdk install` downloads it from npm after you agree, or you install it beside Runrail
+yourself, and Runrail Desktop downloads it after you allow it, each under Anthropic's own terms.

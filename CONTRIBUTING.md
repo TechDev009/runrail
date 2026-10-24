@@ -71,6 +71,20 @@ user-facing change also gets a line under `## [Unreleased]` in
 If the change touches package boundaries or published imports, also run the
 packed-consumer check.
 
+## Releases
+
+A maintainer tags a version that matches `package.json` and has a CHANGELOG.md
+section (`git tag -a v0.1.2 -m "Runrail 0.1.2"`), and pushes the tag. CI builds
+the `runrail` executables on each platform they are for and runs each one,
+then collects them with the package, `install.sh`, and `SHA256SUMS.txt` into a
+draft release. Publishing the draft runs
+[publish.yml](.github/workflows/publish.yml), in the `publish` environment: it
+puts the release's package on npm through Trusted Publishing, with provenance
+(a prerelease under the `next` tag), and writes the Homebrew formula to
+`TechDev009/homebrew-runrail` with the `HOMEBREW_TAP_TOKEN` secret (not for a
+prerelease). `bun scripts/build-binaries.ts --smoke` builds and checks the
+executables locally.
+
 ## Nifra changes
 
 Nifra is a separate repository. A Runrail change must not modify Nifra. If a

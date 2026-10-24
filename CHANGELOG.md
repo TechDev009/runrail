@@ -16,6 +16,9 @@ All notable changes to Runrail will be documented here.
   run or console without it asks whether to download it when you are at the
   terminal; otherwise it, `runrail doctor`, and `HARNESS_SDK_MISSING` name the
   command.
+- Publishing a release puts it on npm (`npm install -g runrail`, through
+  Trusted Publishing with provenance) and in the Homebrew tap
+  (`brew install TechDev009/runrail/runrail`).
 
 ### Security
 
