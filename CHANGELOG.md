@@ -4,6 +4,10 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-24
+
+Security fixes from a review of 0.1.0, and fixes for long model replies.
+
 - A Claude Code run without the Claude Agent SDK now says so: `run` and
   `console` print that Claude Code cannot ask before tools, with the command
   that installs the SDK beside Runrail and its npm page, and `doctor` and
@@ -11,6 +15,52 @@ All notable changes to Runrail will be documented here.
 - `claude.sdk.status` and `claude.sdk.install` control methods, and
   `registerClaudeAgentSdkInstaller`, let a build download the SDK only after
   the person says yes.
+
+### Security
+
+- A repository's own git config no longer runs programs that Runrail's git
+  calls missed: a signing-key command on commit, an alternate-refs command on
+  a pull request fetch, and the hooks of a repository on this computer that a
+  push goes to. Pushes no longer recurse into submodules.
+- Workspace tools no longer read, list, find, or search `.git`, `.hg`, or
+  `.svn`; agents use git commands instead. Agents' file tools never write
+  `.nifra/extensions`, and Claude Code asks before editing it in every mode.
+- Checkpoints leave out every file the workspace tools treat as a
+  credential. `.env.example` and `.env.sample` are no longer snapshotted.
+- A key variable no provider owns (for example `STRIPE_API_KEY`), named by a
+  control caller, is sent only to a server on this machine.
+- `runrail serve` refuses requests from a browser page and from DNS-rebound
+  host names, as `runrail control` does.
+- A plugin's state file is read without following links and within a size
+  limit, and written by rename.
+- The connector list reads the GitHub account from `gh config get`: no token
+  is read and nothing goes over the network.
+
+### Fixes
+
+- Model streams no longer fail after 8,192 events. A long reply now ends at
+  the stream's byte limit (16 MiB by default).
+- A model request refused with 408, 425, 429, 5xx, or 529 before its reply
+  starts is sent again, with backoff and `Retry-After`. A 429 for a used-up
+  quota or billing is not.
+- `/events` replays every retained event after the cursor before it turns
+  live; events past the first `maxEvents` were skipped.
+- Find and search walk breadth first and skip generated folders
+  (`node_modules`, `dist`, and others) unless the walk starts in one or the
+  pattern names it, so the project's own files are reached.
+- `turn.enqueue` and `turn.steer` answers hold at most the turn's newest 4096
+  events within 4 MiB, counting what was left out in `omittedEvents` and
+  `omittedLive`; a repeated idempotency key keeps at most 16 KiB.
+- A control server that fails to start releases what it started, and `stop`
+  closes every part even when one fails.
+- An instruction file linked to the workspace itself (`AGENTS.md -> .`) is no
+  longer a failed session.
+- Workflow calls find their project with a bounded asynchronous git call
+  instead of a blocking one.
+- The check for programs a repository's git config names is reused for up to
+  5 seconds per folder, and checked again against the files git reads.
+- The control contract advertises `sharing`: local, content-free share
+  references. The sharing docs say what is built and what is not.
 
 ## [0.1.0] - 2026-10-16
 

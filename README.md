@@ -52,7 +52,7 @@ Runrail needs [Bun](https://bun.sh) 1.3 or newer and git, on macOS or Linux. Win
 experimental.
 
 ```sh
-bun add -g https://github.com/TechDev009/runrail/releases/download/v0.1.0/runrail-0.1.0.tgz
+bun add -g https://github.com/TechDev009/runrail/releases/download/v0.1.1/runrail-0.1.1.tgz
 runrail --version
 ```
 
@@ -213,7 +213,7 @@ anyone. `RUNRAIL_NIFRA=on` turns these on in every project.
 
 ## Status
 
-Runrail is at 0.1.0. These features pass their tests against stand-ins (a fake `gh`, mock
+Runrail is at 0.1.1. These features pass their tests against stand-ins (a fake `gh`, mock
 services) but have never run against the real thing. Expect rough edges, and
 [report what breaks](https://github.com/TechDev009/runrail/issues):
 
