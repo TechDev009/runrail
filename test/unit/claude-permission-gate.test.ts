@@ -100,6 +100,17 @@ test("an edit to git's own files or the project's .runrail folder is asked about
   expect(await decide("Edit", { file_path: "/repo/src/a.ts" }, "acceptEdits")).toBeUndefined()
 })
 
+test("an edit to the .nifra/extensions the engine imports is asked about in every mode; other .nifra files are not", async () => {
+  for (const target of ["/repo/.nifra/extensions/planted.ts", ".nifra/extensions/nested/helper.js", "/repo/.NIFRA/Extensions/x.ts", "/repo/.nifra/extensions"]) expect(claudeEditsControlPath("Write", { file_path: target }, "/repo")).toBe(true)
+  expect(claudeEditsControlPath("Write", { file_path: "/repo/.nifra/notes.md" }, "/repo")).toBe(false)
+  expect(claudeEditsControlPath("Edit", { file_path: "/repo/src/extensions/x.ts" }, "/repo")).toBe(false)
+  const gate = claudeAskGate("bypassPermissions", [], [], "/repo")
+  for (const mode of ["default", "acceptEdits", "auto", "bypassPermissions"]) {
+    const decision = await gate({ tool_name: "Write", tool_input: { file_path: "/repo/.nifra/extensions/planted.ts" }, permission_mode: mode, cwd: "/repo" }, "toolu_1", { signal: new AbortController().signal })
+    expect(decision.hookSpecificOutput?.permissionDecision).toBe("ask")
+  }
+})
+
 test("a link in the project that reaches its control files is asked about too", async () => {
   const repo = await mkdtemp(join(tmpdir(), "runrail-claude-gate-"))
   try {

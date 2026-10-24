@@ -498,7 +498,8 @@ async function readInstructions(policy: WorkspacePolicy, path: string, maxBytes:
     if ((await lstat(candidate)).isSymbolicLink()) {
       absolute = await realpath(candidate)
       const inside = relative(policy.root, absolute)
-      if (inside.startsWith("..") || isAbsolute(inside)) return undefined
+      // A link to the workspace itself (`-> .`) names no file.
+      if (inside.length === 0 || inside.startsWith("..") || isAbsolute(inside)) return undefined
       await policy.resolveExisting(inside)
     } else {
       absolute = await policy.resolveExisting(path)

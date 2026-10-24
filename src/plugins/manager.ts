@@ -13,6 +13,7 @@ import { TrustedPluginHost, startIsolatedPluginWorker, type PluginHostSnapshot }
 import { validatePluginConfiguration } from "./manifest.ts"
 import { createLocalPluginSourceResolver, type PluginSourceResolver } from "./source.ts"
 import { PiResourceAdapter } from "./pi/index.ts"
+import { writeFileAtomic } from "../runtime/atomic-write.ts"
 import { readBoundedText } from "../runtime/bounded-read.ts"
 import { ensureContainedDirectory } from "../runtime/contained-path.ts"
 
@@ -541,7 +542,8 @@ export class PluginManager {
   private async readState(): Promise<PluginState> {
     const path = join(this.pluginRoot, ".state.json")
     try {
-      const text = await readFile(path, "utf8")
+      // The file arrives with the workspace: a link (to `/dev/zero`, or out of it) is refused, not followed.
+      const text = await readBoundedText(path, MAX_STATE_BYTES, { noFollow: true })
       return parseState(text)
     } catch (error) {
       if (isNotFound(error)) return { version: 1, enabled: {} }
@@ -553,7 +555,8 @@ export class PluginManager {
   private async writeState(): Promise<void> {
     const enabled: Record<string, boolean> = {}
     for (const plugin of this.installed.values()) enabled[plugin.manifest.id] = plugin.enabled
-    await writeFile(join(this.pluginRoot, ".state.json"), JSON.stringify({ version: 1, enabled }), "utf8")
+    // Renamed over the old file, so a link planted in its place is replaced rather than written through.
+    await writeFileAtomic(join(this.pluginRoot, ".state.json"), JSON.stringify({ version: 1, enabled }), 0o644)
   }
 }
 
@@ -583,6 +586,7 @@ export async function createPluginIntegrity(
 }
 
 const MAX_MANIFEST_BYTES = 1024 * 1024
+const MAX_STATE_BYTES = 256 * 1024
 // Folders count against the walk as files do, so an empty deep or wide tree cannot run it long.
 const MAX_PACKAGE_DEPTH = 32
 

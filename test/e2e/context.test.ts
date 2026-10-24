@@ -44,6 +44,19 @@ describe("native context and multimodal resources", () => {
     }
   })
 
+  test("an instruction file linked to the workspace itself or its parent is no instructions, not a failed session", async () => {
+    const cwd = await mkdtemp(join("/tmp", "runrail-context-root-link-"))
+    try {
+      await symlink(".", join(cwd, "AGENTS.md"))
+      await symlink("..", join(cwd, "CLAUDE.md"))
+      const policy = await createWorkspacePolicy(cwd)
+      const resources = await createContextResourceSet(policy, { instructionFiles: ["AGENTS.md", "CLAUDE.md"] })
+      expect(resources.list().filter((resource) => resource.id === "AGENTS.md" || resource.id === "CLAUDE.md")).toEqual([])
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   test("an @name that is not a file stays text, and linked or oversized instructions still load", async () => {
     const cwd = await mkdtemp(join("/tmp", "runrail-context-"))
     const outside = await mkdtemp(join("/tmp", "runrail-context-outside-"))

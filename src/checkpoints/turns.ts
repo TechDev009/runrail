@@ -5,6 +5,7 @@ import { GitError } from "../git/errors.ts"
 import { RUNRAIL_RUNTIME_DIRS, isRunrailRuntimePath, parseGitPath, stripPrefix } from "../git/paths.ts"
 import { runGit, type GitRunOptions, type GitRunResult } from "../git/run.ts"
 import { outsideWorkTree, probeGitRepository, type GitRepository } from "../git/status.ts"
+import { SENSITIVE_IGNORE_PATTERNS } from "../workspace/policy.ts"
 
 /**
  * The work tree before each turn, so a rewind can put files back. Every
@@ -30,7 +31,8 @@ const SHADOW_DIR = "shadow.git"
 const OBJECT_ID = /^[0-9a-f]{40,64}$/
 /**
  * Left out of every snapshot as an exclude file would leave them out: folders a project regenerates,
- * and files that usually hold credentials, which should not be copied into the session's folder.
+ * and every file the workspace tools treat as a credential, which should not be copied into the
+ * session's folder. Key backups (`id_rsa.old`) are left out too.
  */
 const SHADOW_EXCLUDES = [
   "node_modules/",
@@ -39,21 +41,11 @@ const SHADOW_EXCLUDES = [
   "__pycache__/",
   ".DS_Store",
   ...RUNRAIL_RUNTIME_DIRS.map((dir) => `/${dir}/`),
-  ".env",
-  ".env.*",
-  "!.env.example",
-  "!.env.sample",
-  "*.pem",
-  "*.key",
-  "*.p12",
-  "*.pfx",
+  ...SENSITIVE_IGNORE_PATTERNS,
   "id_rsa*",
+  "id_dsa*",
   "id_ecdsa*",
   "id_ed25519*",
-  ".ssh/",
-  ".aws/",
-  ".gnupg/",
-  ".netrc",
 ]
 
 export type CheckpointSkip = "too-large" | "failed"

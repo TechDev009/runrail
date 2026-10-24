@@ -76,8 +76,9 @@ export function claudeAskGate(launchMode: string, allowedTools: readonly string[
 }
 
 /**
- * An edit to git's own files or the project's `.runrail` folder, which decide what runs later
- * (hooks, filters, plugins, setups). It is asked about in every mode, Full access included.
+ * An edit to git's own files, the project's `.runrail` folder, or the `.nifra/extensions` the engine
+ * imports, which decide what runs later (hooks, filters, plugins, setups, extension code). It is
+ * asked about in every mode, Full access included.
  */
 export function claudeEditsControlPath(toolName: string, toolInput: unknown, cwd: string): boolean {
   if (!EDIT_TOOLS.has(toolName)) return false
@@ -105,7 +106,7 @@ function segmentsUnder(root: string, path: string): readonly string[] | undefine
 }
 
 function isControlPath(segments: readonly string[]): boolean {
-  return segments.includes(".git") || segments[0] === ".runrail"
+  return segments.includes(".git") || segments[0] === ".runrail" || (segments[0] === ".nifra" && segments[1] === "extensions")
 }
 
 /** The real path of `path` through its nearest existing ancestor, following links, dangling ones too. */

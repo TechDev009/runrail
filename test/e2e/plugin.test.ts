@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
 import {
@@ -146,6 +146,37 @@ describe("Runrail plugin platform", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true })
       await rm(source, { recursive: true, force: true })
+    }
+  })
+
+  test("a linked or oversized plugin state file is refused, and saving state replaces a link instead of writing through it", async () => {
+    const workspace = await mkdtemp(join("/tmp", "runrail-plugin-state-"))
+    const source = await mkdtemp(join("/tmp", "runrail-plugin-state-source-"))
+    const outside = await mkdtemp(join("/tmp", "runrail-plugin-state-outside-"))
+    try {
+      const state = join(workspace, ".runrail", "plugins", ".state.json")
+      const elsewhere = join(outside, "state.json")
+      const original = JSON.stringify({ version: 1, enabled: {} })
+      await writeFile(elsewhere, original)
+      await mkdir(join(workspace, ".runrail", "plugins"), { recursive: true })
+      for (const plant of [() => symlink("/dev/zero", state), () => symlink(elsewhere, state), () => writeFile(state, JSON.stringify({ version: 1, enabled: {}, pad: "x".repeat(300 * 1024) }))]) {
+        await plant()
+        await expect(createPluginManager({ workspaceRoot: workspace })).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID" })
+        await rm(state)
+      }
+      await makePlugin(source, "1.0.0")
+      const manager = await createPluginManager({ workspaceRoot: workspace })
+      await manager.install(source)
+      await rm(state)
+      await symlink(elsewhere, state)
+      await manager.setEnabled("fixture-plugin", false)
+      expect(await readFile(elsewhere, "utf8")).toBe(original)
+      expect((await lstat(state)).isFile()).toBe(true)
+      expect(JSON.parse(await readFile(state, "utf8"))).toEqual({ version: 1, enabled: { "fixture-plugin": false } })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+      await rm(source, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
     }
   })
 

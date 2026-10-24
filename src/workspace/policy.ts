@@ -109,13 +109,13 @@ function rootPolicy(root: string): RootPolicy {
       if (entry.isSymbolicLink()) throw new Error("workspace path escapes authorized root through an unauthorized symlink")
       const actual = await realpath(candidate)
       assertInside(root, actual)
-      assertSafeFile(actual)
+      assertSafeFile(root, actual)
       return actual
     },
     async resolveForWrite(input) {
       const candidate = resolveInside(root, input)
-      assertSafeFile(candidate)
       assertNotControlPath(root, candidate)
+      assertSafeFile(root, candidate)
       let parentCandidate = dirname(candidate)
       for (;;) {
         try {
@@ -127,7 +127,7 @@ function rootPolicy(root: string): RootPolicy {
             if (entry.isSymbolicLink()) throw new Error("workspace path escapes authorized root through an unauthorized symlink")
             const actual = await realpath(candidate)
             assertInside(root, actual)
-            assertSafeFile(actual)
+            assertSafeFile(root, actual)
           } catch (error) {
             if (!isNotFound(error)) throw error
           }
@@ -170,14 +170,16 @@ function rootPolicy(root: string): RootPolicy {
     },
     async find(input = "", pattern, maxDepth = 16, maxEntries = 256) {
       const matcher = globMatcher(pattern)
-      return walk(input, matcher, maxDepth, maxEntries)
+      const named = pattern.toLowerCase()
+      // A pattern that names a generated folder (`node_modules/**/package.json`) is looked for there.
+      return walk(input, matcher, maxDepth, maxEntries, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()) || named.includes(name.toLowerCase()))
     },
     async search(input = "", query, maxResults = 128, maxFileBytes = DEFAULT_MAX_FILE_BYTES) {
       if (typeof query !== "string" || query.length === 0 || query.length > 512)
         throw new TypeError("workspace search query is invalid")
       assertPositiveBound(maxResults, 1, 512, "maxResults")
       assertPositiveBound(maxFileBytes, 1, DEFAULT_MAX_FILE_BYTES, "maxFileBytes")
-      const entries = await walk(input, (path, type) => type === "file", 16, 2048)
+      const entries = await walk(input, (path, type) => type === "file", 16, 2048, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()))
       const matches: WorkspaceSearchMatch[] = []
       for (const entry of entries) {
         if (entry.type !== "file") continue
@@ -202,11 +204,17 @@ function rootPolicy(root: string): RootPolicy {
   }
   return Object.freeze(policy)
 
+  /**
+   * Breadth first, so one large folder early in name order cannot spend the budget before the
+   * project's own files are reached. `descend` is not asked below a start inside a generated
+   * folder: the caller asked to look there.
+   */
   async function walk(
     input: string,
     include: (path: string, type: WorkspaceEntry["type"]) => boolean,
     maxDepth: number,
     maxEntries: number,
+    descend: (name: string) => boolean = () => true,
   ): Promise<readonly WorkspaceEntry[]> {
     assertPositiveBound(maxDepth, 0, 32, "maxDepth")
     assertPositiveBound(maxEntries, 1, 2_048, "maxEntries")
@@ -214,36 +222,41 @@ function rootPolicy(root: string): RootPolicy {
     const startStat = await lstat(start)
     if (startStat.isSymbolicLink()) throw new Error("workspace path escapes authorized root through an unauthorized symlink")
     if (!startStat.isDirectory()) throw new TypeError("workspace path is not a directory")
+    const insideGenerated = relative(root, start).split(sep).some((segment) => GENERATED_FOLDERS.has(segment.toLowerCase()))
     const result: WorkspaceEntry[] = []
     // Results bound what is returned; this bounds what is looked at, so a pattern that matches
     // nothing cannot walk a whole huge tree.
     let visited = 0
-    const visit = async (directory: string, depth: number): Promise<void> => {
-      const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
-        a.name.localeCompare(b.name),
-      )
-      for (const child of children) {
-        if (result.length >= maxEntries || visited >= MAX_VISITED_ENTRIES) return
-        visited += 1
-        if (child.isSymbolicLink()) continue
-        const absolute = join(directory, child.name)
-        const relativePath = relative(root, absolute)
-        try {
-          assertInside(root, absolute)
-          assertSafeFile(absolute)
-        } catch {
-          continue
+    let level = [start]
+    for (let depth = 0; depth <= maxDepth && level.length > 0; depth += 1) {
+      const next: string[] = []
+      for (const directory of level) {
+        const children = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+          a.name.localeCompare(b.name),
+        )
+        for (const child of children) {
+          if (result.length >= maxEntries || visited >= MAX_VISITED_ENTRIES) return Object.freeze(result)
+          visited += 1
+          if (child.isSymbolicLink()) continue
+          const absolute = join(directory, child.name)
+          const relativePath = relative(root, absolute)
+          try {
+            assertInside(root, absolute)
+            assertSafeFile(root, absolute)
+          } catch {
+            continue
+          }
+          if (child.isDirectory()) {
+            if (include(relativePath, "directory")) result.push({ path: relativePath, type: "directory" })
+            if (depth < maxDepth && (insideGenerated || descend(child.name))) next.push(absolute)
+            continue
+          }
+          if (!child.isFile() || !include(relativePath, "file")) continue
+          result.push({ path: relativePath, type: "file", bytes: (await lstat(absolute)).size })
         }
-        if (child.isDirectory()) {
-          if (include(relativePath, "directory")) result.push({ path: relativePath, type: "directory" })
-          if (depth < maxDepth) await visit(absolute, depth + 1)
-          continue
-        }
-        if (!child.isFile() || !include(relativePath, "file")) continue
-        result.push({ path: relativePath, type: "file", bytes: (await lstat(absolute)).size })
       }
+      level = next
     }
-    await visit(start, 0)
     return Object.freeze(result)
   }
 }
@@ -275,32 +288,62 @@ function assertInside(root: string, candidate: string): void {
     throw new Error("workspace path escapes the authorized root")
 }
 
-/** True for credential-bearing file names that workspace and git tools never read or diff. */
-const SENSITIVE_NAMES: ReadonlySet<string> = new Set([".env", ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json", ".dockercfg"])
+/** Credential-bearing file names that workspace and git tools never read or diff. */
+const SENSITIVE_NAMES: readonly string[] = [".env", ".npmrc", ".pypirc", ".netrc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json", ".dockercfg"]
+const SENSITIVE_NAME_PREFIXES: readonly string[] = [".env."]
+const SENSITIVE_EXTENSIONS: readonly string[] = ["pem", "key", "p12", "pfx", "keystore", "jks"]
 /** Folders whose files are all credentials, such as `~/.aws` copied into a project. */
-const SENSITIVE_FOLDERS: ReadonlySet<string> = new Set([".aws", ".ssh", ".gnupg", ".docker", ".kube", ".azure", ".config/gcloud"])
+const SENSITIVE_FOLDERS: readonly string[] = [".aws", ".ssh", ".gnupg", ".docker", ".kube", ".azure", ".config/gcloud"]
+const SENSITIVE_NAME_SET: ReadonlySet<string> = new Set(SENSITIVE_NAMES)
+const SENSITIVE_FOLDER_SET: ReadonlySet<string> = new Set(SENSITIVE_FOLDERS)
+const SENSITIVE_EXTENSION = new RegExp(`\\.(${SENSITIVE_EXTENSIONS.join("|")})$`)
 
 export function isSensitiveWorkspacePath(path: string): boolean {
   const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0)
   const name = (segments.at(-1) ?? "").toLowerCase()
-  if (SENSITIVE_NAMES.has(name) || name.startsWith(".env.") || /\.(pem|key|p12|pfx|keystore|jks)$/.test(name)) return true
+  if (SENSITIVE_NAME_SET.has(name) || SENSITIVE_NAME_PREFIXES.some((prefix) => name.startsWith(prefix)) || SENSITIVE_EXTENSION.test(name)) return true
   const folders = segments.slice(0, -1).map((segment) => segment.toLowerCase())
-  return folders.some((segment, index) => SENSITIVE_FOLDERS.has(segment) || SENSITIVE_FOLDERS.has(`${segment}/${folders[index + 1] ?? ""}`))
+  return folders.some((segment, index) => SENSITIVE_FOLDER_SET.has(segment) || SENSITIVE_FOLDER_SET.has(`${segment}/${folders[index + 1] ?? ""}`))
 }
 
+/** The files `isSensitiveWorkspacePath` names, as gitignore patterns matching in any case as it does. */
+export const SENSITIVE_IGNORE_PATTERNS: readonly string[] = Object.freeze([
+  ...SENSITIVE_NAMES.map(anyCase),
+  ...SENSITIVE_NAME_PREFIXES.map((prefix) => `${anyCase(prefix)}*`),
+  ...SENSITIVE_EXTENSIONS.map((extension) => `*.${anyCase(extension)}`),
+  ...SENSITIVE_FOLDERS.map((folder) => `**/${anyCase(folder)}/`),
+])
+
+function anyCase(text: string): string {
+  return text.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`)
+}
+
+/** Version control data, which its own commands read; it can hold credentials (remote URLs with tokens). */
+const VCS_FOLDERS: ReadonlySet<string> = new Set([".git", ".hg", ".svn"])
 /**
- * Git's own files and the project's `.runrail` folder decide what runs later (hooks, filters,
- * plugins, setups), so an agent's file tools never write them; the person edits them.
+ * Folders a project regenerates. Find and search do not go into them unless the walk starts inside
+ * one, so the project's own files are reached within the walk budget.
+ */
+const GENERATED_FOLDERS: ReadonlySet<string> = new Set(["node_modules", "dist", "build", "out", "target", "vendor", "__pycache__", ".venv", "venv", ".next"])
+
+/**
+ * Git's own files, the project's `.runrail` folder, and the Nifra extensions the engine imports
+ * decide what runs later (hooks, filters, plugins, setups, extension code), so an agent's file
+ * tools never write them; the person edits them.
  */
 function assertNotControlPath(root: string, path: string): void {
   const segments = relative(root, path).split(/[\\/]/).map((segment) => segment.toLowerCase())
   if (segments.includes(".git") || segments[0] === ".runrail")
     throw new Error("workspace path is git's or Runrail's own configuration, which workspace tools never write")
+  if (segments[0] === ".nifra" && segments[1] === "extensions")
+    throw new Error("workspace path is a Nifra extension, which the engine imports and runs; workspace tools never write it")
 }
 
-function assertSafeFile(path: string): void {
+function assertSafeFile(root: string, path: string): void {
   if (isSensitiveWorkspacePath(path))
     throw new Error("sensitive credential file is excluded from workspace tools")
+  if (relative(root, path).split(/[\\/]/).some((segment) => VCS_FOLDERS.has(segment.toLowerCase())))
+    throw new Error("version control data (.git, .hg, .svn) is excluded from workspace tools; use git commands such as git status, git log, or git show instead")
 }
 
 function isNotFound(error: unknown): boolean {

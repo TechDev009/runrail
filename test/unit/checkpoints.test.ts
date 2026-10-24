@@ -137,7 +137,21 @@ describe("checkpoints in a git folder", () => {
     await writeFile(join(repo, "deploy.pem"), "-----\n")
     await writeFile(join(repo, "scratch.txt"), "mine\n")
     await writeFile(join(repo, ".env.example"), "TOKEN=\n")
-    expect((await store.changes(first.n)).files).toEqual([{ path: ".env.example", change: "added" }])
+    await writeFile(join(repo, "notes.txt"), "kept\n")
+    expect((await store.changes(first.n)).files).toEqual([{ path: "notes.txt", change: "added" }])
+  })
+
+  test("every file the workspace tools treat as a credential is left out of the snapshot", async () => {
+    const secrets = ["credentials.json", "CREDENTIALS.JSON", ".npmrc", "pkg/.pypirc", "_netrc", ".git-credentials", ".pgpass", ".htpasswd", "id_dsa", ".dockercfg", "release.jks", "app.keystore", ".docker/config.json", ".kube/config", ".azure/token", "ops/.config/gcloud/adc.json"]
+    for (const path of secrets) {
+      await mkdir(join(repo, path, ".."), { recursive: true })
+      await writeFile(join(repo, path), "secret\n")
+    }
+    await writeFile(join(repo, "notes.txt"), "kept\n")
+    const tree = (await checkpoints().capture()).tree ?? ""
+    const snapshot = git(["--git-dir", join(state, "shadow.git"), "ls-tree", "-r", "--name-only", tree]).trim().split("\n")
+    expect(snapshot).toContain("notes.txt")
+    expect(snapshot.filter((path) => secrets.includes(path))).toEqual([])
   })
 })
 
