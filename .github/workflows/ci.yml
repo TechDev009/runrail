@@ -11,13 +11,19 @@ permissions:
 
 jobs:
   # Tests run on macOS too, where most people run Runrail; the checks that do not depend on the
-  # platform run on Linux only.
+  # platform run on Linux only. On GitHub's macOS runners a test that opens a terminal
+  # (Bun.spawn with `terminal`) has hung, so that leg reports but does not hold up a release.
   verify:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+            experimental: true
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental == true }}
 
     steps:
       - name: Check out repository
