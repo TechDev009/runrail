@@ -105,6 +105,8 @@ function rootPolicy(root: string): RootPolicy {
     root,
     async resolveExisting(input) {
       const candidate = resolveInside(root, input)
+      // By name first, as writes do, so `.GIT/config` is refused on a case-sensitive disk too.
+      assertSafeFile(root, candidate)
       const entry = await lstat(candidate)
       if (entry.isSymbolicLink()) throw new Error("workspace path escapes authorized root through an unauthorized symlink")
       const actual = await realpath(candidate)
