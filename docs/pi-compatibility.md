@@ -2,7 +2,7 @@
 
 This document is the versioned compatibility contract for the native Runrail
 surface and the `runrail pi` escape hatch. The locked target is Pi `0.84.1`
-against Runrail `0.1.1`. A Pi upgrade creates a new matrix revision; it does
+against Runrail `0.1.2`. A Pi upgrade creates a new matrix revision; it does
 not silently expand this one.
 
 The machine-readable matrix is available from the public

@@ -4,6 +4,11 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-25
+
+New ways to install Runrail, and the Claude Agent SDK downloaded from the
+command line.
+
 - Standalone `runrail` executables, which need no Bun: macOS (Apple silicon
   and Intel), Linux (arm64 and x64, glibc), and Windows (x64, experimental).
   Each release carries them with `install.sh`, which puts one in
@@ -30,6 +35,11 @@ All notable changes to Runrail will be documented here.
   The Runrail that Claude Code starts again as an MCP server, and the creator
   `runrail new` runs, get the same flags. That command needs a POSIX `sh`, so on
   Windows install from the release's zip.
+
+### Fixes
+
+- Workspace reads refuse a path inside `.GIT`, in any case, on a case-sensitive
+  disk too, as writes did.
 
 ## [0.1.1] - 2026-10-24
 
