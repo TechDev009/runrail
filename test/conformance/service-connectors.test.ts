@@ -57,7 +57,7 @@ describe("repository service connector adapters", () => {
         "/chat.postMessage",
       ])
       expect(requests[0]?.authorization).toBe("Bearer connector-fixture-secret")
-      expect(requests[2]?.authorization).toBe("Bearer connector-fixture-secret")
+      expect(requests[2]?.authorization).toBe("connector-fixture-secret")
       expect(requests[3]?.authorization).toMatch(/^Basic /)
       expect(requests[1]?.body).toContain('"title":"fixture"')
       expect(requests[2]?.body).toContain("RunrailIssueSearch")

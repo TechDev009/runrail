@@ -4,6 +4,11 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+### Fixes
+
+- The Linear connector sends your personal API key the way Linear's API
+  asks, with no `Bearer` prefix.
+
 ## [0.1.2] - 2026-10-25
 
 New ways to install Runrail, and the Claude Agent SDK downloaded from the

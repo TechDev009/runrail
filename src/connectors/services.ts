@@ -111,7 +111,7 @@ export function createGitHubConnector(options: ServiceConnectorOptions): Connect
 
 /** Caller-owned Linear GraphQL actions. Query and mutation payloads are fixed by this adapter. */
 export function createLinearConnector(options: ServiceConnectorOptions): ConnectorDefinition {
-  return createHttpConnector(serviceOptions(options, "linear", "Linear", "https://api.linear.app/", "linear", "bearer", [
+  return createHttpConnector(serviceOptions(options, "linear", "Linear", "https://api.linear.app/", "linear", "raw", [
     {
       name: "searchIssues",
       description: "Search Linear issues by text.",
@@ -214,7 +214,7 @@ export function createSlackConnector(options: ServiceConnectorOptions): Connecto
   ]))
 }
 
-function serviceOptions(options: ServiceConnectorOptions, id: string, _name: string, defaultEndpoint: string, kind: string, scheme: "bearer" | "basic", actions: readonly ConnectorHttpAction[]): ConnectorHttpOptions {
+function serviceOptions(options: ServiceConnectorOptions, id: string, _name: string, defaultEndpoint: string, kind: string, scheme: "bearer" | "basic" | "raw", actions: readonly ConnectorHttpAction[]): ConnectorHttpOptions {
   if (options === null || typeof options !== "object" || options.credential === undefined) throw new ConnectorError("CONNECTOR_CREDENTIALS", `${id} connector credential is required`)
   return {
     descriptor: { id: options.id ?? id, version: options.version ?? "1.0.0", kind, capabilities: serviceCapabilities },

@@ -18,7 +18,8 @@ export interface ConnectorCredentialResolver {
   resolve(reference: ConnectorCredentialReference): string | PromiseLike<string>
 }
 
-export type ConnectorAuthScheme = "bearer" | "token" | "basic" | "header"
+/** `raw` sends the secret as the whole `Authorization` value, as Linear wants for personal API keys. */
+export type ConnectorAuthScheme = "bearer" | "token" | "basic" | "header" | "raw"
 export type ConnectorHttpMethod = "DELETE" | "GET" | "HEAD" | "PATCH" | "POST" | "PUT"
 
 export interface ConnectorHttpCredential {
@@ -259,7 +260,7 @@ function validateAction(action: ConnectorHttpAction): ConnectorHttpAction {
 }
 
 function validateCredential(credential: ConnectorHttpCredential): void {
-  if (credential === null || typeof credential !== "object" || credential.reference === null || typeof credential.reference !== "object" || Array.isArray(credential.reference) || credential.resolver === null || typeof credential.resolver !== "object" || Array.isArray(credential.resolver) || typeof credential.resolver.resolve !== "function" || credential.scheme !== undefined && !["bearer", "token", "basic", "header"].includes(credential.scheme))
+  if (credential === null || typeof credential !== "object" || credential.reference === null || typeof credential.reference !== "object" || Array.isArray(credential.reference) || credential.resolver === null || typeof credential.resolver !== "object" || Array.isArray(credential.resolver) || typeof credential.resolver.resolve !== "function" || credential.scheme !== undefined && !["bearer", "token", "basic", "header", "raw"].includes(credential.scheme))
     throw new ConnectorError("CONNECTOR_CREDENTIALS", "HTTP connector credential is invalid")
   if (credential.reference.kind === "environment") validateEnvironmentName(credential.reference.environment)
   else if (credential.reference.kind !== "caller" || !validAccount(credential.reference.account)) throw new ConnectorError("CONNECTOR_CREDENTIALS", "connector credential reference is invalid")
@@ -281,7 +282,7 @@ async function resolveAuth(credential: ConnectorHttpCredential): Promise<string>
   const scheme = credential.scheme ?? "bearer"
   if (scheme === "basic") return `Basic ${Buffer.from(`${credential.username}:${secret}`, "utf8").toString("base64")}`
   if (scheme === "token") return `token ${secret}`
-  if (scheme === "header") return secret
+  if (scheme === "header" || scheme === "raw") return secret
   return `Bearer ${secret}`
 }
 
