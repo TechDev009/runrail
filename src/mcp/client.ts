@@ -15,7 +15,7 @@ import {
   type McpToolDescriptor,
   isMcpRequestMessage,
 } from "./protocol.ts"
-import { McpStdioTransport, type McpStdioTransportOptions, type McpTransport } from "./transport.ts"
+import { McpStdioTransport, McpTransportError, type McpStdioTransportOptions, type McpTransport } from "./transport.ts"
 import { McpHttpTransport, type McpHttpTransportOptions } from "./http.ts"
 
 export interface McpClientOptions {
@@ -54,7 +54,7 @@ export class McpClient {
   private nextId = 1
   private reader: Promise<void> | undefined
   private closed = false
-  private terminalError: McpClientError | undefined
+  private terminalError: McpClientError | McpTransportError | undefined
   private initialized = false
   private serverInfoValue: McpServerInfo | undefined
   private serverCapabilitiesValue: Readonly<Record<string, unknown>> | undefined
@@ -86,8 +86,8 @@ export class McpClient {
     }
   }
   static async connectHttp(options: McpHttpClientOptions): Promise<McpClient> {
-    const { url, headers, allowRemote, timeoutMs, maxMessageBytes, clientName, clientVersion, protocolVersion, maxTools, maxResources, maxPrompts } = options
-    const transport = new McpHttpTransport({ url, headers, allowRemote, timeoutMs, maxMessageBytes })
+    const { url, headers, authorization, allowRemote, timeoutMs, maxMessageBytes, clientName, clientVersion, protocolVersion, maxTools, maxResources, maxPrompts } = options
+    const transport = new McpHttpTransport({ url, headers, authorization, allowRemote, timeoutMs, maxMessageBytes })
     const client = new McpClient(transport, { clientName, clientVersion, protocolVersion, timeoutMs, maxMessageBytes, maxTools, maxResources, maxPrompts })
     try {
       await client.initialize()
@@ -263,7 +263,8 @@ export class McpClient {
         }
         if (!this.closed) throw new McpClientError("MCP_CLIENT_CLOSED", "MCP server closed the transport")
       } catch (error) {
-        const normalized = error instanceof McpClientError ? error : new McpClientError("MCP_RESPONSE_INVALID", "MCP transport ended")
+        // A refused credential keeps its code: the person can fix it by signing in.
+        const normalized = error instanceof McpClientError || (error instanceof McpTransportError && error.code === "MCP_UNAUTHORIZED") ? error : new McpClientError("MCP_RESPONSE_INVALID", "MCP transport ended")
         if (!this.closed) this.terminalError = normalized
         for (const entry of this.pending.values()) {
           clearTimeout(entry.timer)

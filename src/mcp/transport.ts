@@ -19,7 +19,7 @@ export interface McpTransport {
   close(): Promise<void>
 }
 
-export type McpTransportErrorCode = "MCP_TRANSPORT_INVALID" | "MCP_TRANSPORT_FAILED" | "MCP_MESSAGE_LIMIT"
+export type McpTransportErrorCode = "MCP_TRANSPORT_INVALID" | "MCP_TRANSPORT_FAILED" | "MCP_MESSAGE_LIMIT" | "MCP_UNAUTHORIZED"
 
 export class McpTransportError extends Error {
   constructor(readonly code: McpTransportErrorCode, reason: string) {

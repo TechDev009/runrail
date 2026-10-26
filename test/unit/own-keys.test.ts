@@ -25,10 +25,11 @@ test("names shared with Object's prototype are read as plain keys", () => {
   expect(() => validatePluginConfiguration(manifest, { toString: "y" })).not.toThrow()
 })
 
-test("an account can never take an id the vault keeps for a connector's key", async () => {
+test("an account can never take an id the vault keeps for a connector's key or an MCP server's sign-in", async () => {
   const { parseAccountReference } = await import("../../src/accounts/types.ts")
   const reference = { accountId: "connector:slack", provider: "openai", label: "Mine", authMode: "api-key", scopes: [], createdAt: 1, updatedAt: 1 }
   expect(() => parseAccountReference(reference)).toThrow("account id is reserved")
   expect(() => parseAccountReference({ ...reference, accountId: "CONNECTOR:Slack" })).toThrow("account id is reserved")
+  expect(() => parseAccountReference({ ...reference, accountId: "mcp-oauth:0123abcd" })).toThrow("account id is reserved")
   expect(parseAccountReference({ ...reference, accountId: "slack-connector" }).accountId).toBe("slack-connector")
 })

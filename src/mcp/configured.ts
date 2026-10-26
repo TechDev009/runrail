@@ -3,6 +3,7 @@ import type { BehaviorMcpServer } from "../behavior/config.ts"
 import { grantOf, mcpGrantKey, type IntegrationGrants } from "../connectors/tools.ts"
 import { createMcpNativeTools } from "./bridge.ts"
 import { McpClient, type McpHttpClientOptions, type McpStdioClientOptions } from "./client.ts"
+import type { McpSignIns } from "./oauth.ts"
 
 /**
  * MCP servers named in the behavior file, started for Runrail's own loop. A server that does not
@@ -38,6 +39,7 @@ export async function connectConfiguredMcp(
   connect: McpConnect = (options) => McpClient.connect(options),
   connectHttp: McpConnectHttp = (options) => McpClient.connectHttp(options),
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  signIns?: McpSignIns,
 ): Promise<ConfiguredMcp> {
   if (servers.length === 0) return NO_CONFIGURED_MCP
   const clients: Pick<McpClient, "close">[] = []
@@ -48,8 +50,17 @@ export async function connectConfiguredMcp(
       if (server.transport === "http") {
         const token = server.bearerEnv === undefined ? undefined : environment[server.bearerEnv]
         if (server.bearerEnv !== undefined && (token === undefined || token.length === 0)) return { status: Object.freeze({ name: server.name, state: "failed", tools: 0, code: "MCP_TOKEN_MISSING" }), tools: [] }
+        // A token named in the environment wins over a sign-in; the person set it on purpose.
+        const signedIn = token === undefined && signIns !== undefined && (await signIns.stored(server.url))
+        const url = server.url
         // The address was confirmed by the person who added the server, so a remote one is allowed.
-        client = await connectHttp({ url: server.url, allowRemote: true, timeoutMs: CONNECT_TIMEOUT_MS, ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }) })
+        client = await connectHttp({
+          url,
+          allowRemote: true,
+          timeoutMs: CONNECT_TIMEOUT_MS,
+          ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }),
+          ...(signedIn ? { authorization: (signal: AbortSignal) => signIns!.token(url, signal) } : {}),
+        })
       } else {
         client = await connect({ command: server.command, args: server.args, cwd, inherit: server.env, timeoutMs: CONNECT_TIMEOUT_MS })
       }
@@ -59,7 +70,10 @@ export async function connectConfiguredMcp(
       return { status: Object.freeze({ name: server.name, state: "ready", tools: tools.length }), tools }
     } catch (error) {
       await client?.close().catch(() => undefined)
-      return { status: Object.freeze({ name: server.name, state: "failed", tools: 0, code: codeOf(error) }), tools: [] }
+      const code = codeOf(error)
+      // A refused request to a server with no token named for it is one a sign-in can fix.
+      const shown = code === "MCP_UNAUTHORIZED" && server.transport === "http" ? (server.bearerEnv === undefined ? "MCP_SIGN_IN_REQUIRED" : "MCP_TOKEN_REJECTED") : code
+      return { status: Object.freeze({ name: server.name, state: "failed", tools: 0, code: shown }), tools: [] }
     }
   }))
   return Object.freeze({

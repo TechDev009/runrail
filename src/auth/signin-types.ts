@@ -10,6 +10,10 @@ export type SignInErrorCode =
   | "AUTH_LIMIT"
   | "AUTH_ACCOUNT_MISMATCH"
   | "AUTH_UNAVAILABLE"
+  /** The server offers no sign-in Runrail can take part in (no PKCE). */
+  | "AUTH_UNSUPPORTED"
+  /** The authorization server registers no apps; one the person registered there must be named first. */
+  | "AUTH_CLIENT_REQUIRED"
   | "AUTH_CANCELLED"
   | "AUTH_TIMEOUT"
   | "AUTH_DENIED"

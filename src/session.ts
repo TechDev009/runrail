@@ -56,6 +56,7 @@ import { createContentModelPort, type RunrailContentModelPort, type RunrailConte
 import { createMcpContextResources, createMcpNativeTools, createMcpPromptCatalog } from "./mcp/bridge.ts"
 import type { McpClient } from "./mcp/client.ts"
 import { connectConfiguredMcp, grantConfiguredMcp, NO_CONFIGURED_MCP, type ConfiguredMcp, type McpServerStatus } from "./mcp/configured.ts"
+import type { McpSignIns } from "./mcp/oauth.ts"
 import {
   ContextResourceSet,
   createContextAwareModelPort,
@@ -283,6 +284,8 @@ export interface RunrailSessionOptions {
    * Runrail's own loop gets native tools, Claude Code the `mcpConfig` server, Codex dynamic tools.
    */
   readonly connectors?: RunrailConnectorAccess
+  /** The MCP servers the person signed in to; their tokens are read for each request. */
+  readonly mcpSignIns?: McpSignIns
 }
 
 export interface RunrailConnectorAccess {
@@ -315,6 +318,7 @@ export interface RunrailRuntime {
   readonly backgroundCommands?: NativeBackgroundCommands
   /** The behavior file's MCP servers, whether or not this backend starts them. */
   readonly mcpServers?: readonly BehaviorMcpServer[]
+  readonly mcpSignIns?: McpSignIns
   readonly modelCatalog?: ModelCatalog
   readonly modelRouter?: RoutedModelPort
   readonly modelDescriptor?: ModelDescriptor
@@ -481,6 +485,7 @@ export class RunrailSession {
   readonly connectorApprovals?: ConnectorApprovals
   private readonly backgroundCommands?: NativeBackgroundCommands
   private readonly mcpServers: readonly BehaviorMcpServer[]
+  private readonly mcpSignIns: McpSignIns | undefined
   readonly usage?: BudgetLedger
   readonly metrics?: RunrailMetrics
   readonly plugins?: PluginHostSnapshot
@@ -532,6 +537,7 @@ export class RunrailSession {
       readonly connectors?: { readonly registry: ConnectorRegistry; readonly tools: readonly GrantedConnectorTool[]; readonly approvals?: ConnectorApprovals }
       readonly backgroundCommands?: NativeBackgroundCommands
       readonly mcpServers?: readonly BehaviorMcpServer[]
+      readonly mcpSignIns?: McpSignIns
       readonly modelCatalog?: ModelCatalog
       readonly modelRouter?: RoutedModelPort
       readonly setPromptParts?: (parts: readonly RunrailContentPart[]) => void
@@ -564,6 +570,7 @@ export class RunrailSession {
     this.connectorApprovals = controls.connectors?.approvals
     this.backgroundCommands = controls.backgroundCommands
     this.mcpServers = controls.mcpServers ?? []
+    this.mcpSignIns = controls.mcpSignIns
     this.modelCatalog = controls.modelCatalog
     this.modelRouter = controls.modelRouter
     this.setPromptParts = controls.setPromptParts
@@ -777,7 +784,7 @@ export class RunrailSession {
   async checkMcpServer(name: string): Promise<McpServerStatus | undefined> {
     const server = this.mcpServers.find((candidate) => candidate.name === name)
     if (server === undefined) return undefined
-    const checked = await connectConfiguredMcp([{ ...server, enabled: true }], this.policy.root)
+    const checked = await connectConfiguredMcp([{ ...server, enabled: true }], this.policy.root, undefined, undefined, process.env, this.mcpSignIns)
     await checked.close()
     return checked.status[0]
   }
@@ -1089,6 +1096,7 @@ export async function createRunrailSession(options: RunrailSessionOptions): Prom
     ...(runtime.connectors === undefined ? {} : { connectors: runtime.connectors }),
     ...(runtime.backgroundCommands === undefined ? {} : { backgroundCommands: runtime.backgroundCommands }),
     ...(runtime.mcpServers === undefined ? {} : { mcpServers: runtime.mcpServers }),
+    ...(runtime.mcpSignIns === undefined ? {} : { mcpSignIns: runtime.mcpSignIns }),
     nifra: runtime.nifra,
     ...(runtime.piExtensions === undefined ? {} : { piExtensions: runtime.piExtensions }),
     ...(runtime.usage === undefined && options.budget?.maxDurationMs !== undefined ? { endsAt: startedAt + options.budget.maxDurationMs } : {}),
@@ -1244,7 +1252,7 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
   const servers = nifraServer === undefined ? behavior?.mcpServers : [...(behavior?.mcpServers ?? []), nifraServer]
   // A server the role may not use is not started at all.
   const grantedServers = servers?.map((server) => (grantOf(grants, mcpGrantKey(server.name)) === "off" ? { ...server, enabled: false } : server))
-  const configuredMcp = options.backend === "native" && grantedServers !== undefined ? grantConfiguredMcp(await connectConfiguredMcp(grantedServers, policy.root), grants) : NO_CONFIGURED_MCP
+  const configuredMcp = options.backend === "native" && grantedServers !== undefined ? grantConfiguredMcp(await connectConfiguredMcp(grantedServers, policy.root, undefined, undefined, process.env, options.mcpSignIns), grants) : NO_CONFIGURED_MCP
   owned.push(() => configuredMcp.close())
   const grantedConnectors = options.connectors === undefined ? [] : grantedConnectorTools(options.connectors.registry, grants)
   const backgroundCommands = options.backend === "native" ? new NativeBackgroundCommands({ root: policy.root, ...(options.onLive === undefined ? {} : { onLive: options.onLive }) }) : undefined
@@ -1368,6 +1376,7 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
     ...(options.connectors === undefined ? {} : { connectors: { registry: options.connectors.registry, tools: grantedConnectors, ...(connectorApprovals === undefined ? {} : { approvals: connectorApprovals }) } }),
     ...(backgroundCommands === undefined ? {} : { backgroundCommands }),
     ...(behavior === undefined || behavior.mcpServers.length === 0 ? {} : { mcpServers: behavior.mcpServers }),
+    ...(options.mcpSignIns === undefined ? {} : { mcpSignIns: options.mcpSignIns }),
     ...(nativeModel?.catalog === undefined ? {} : { modelCatalog: nativeModel.catalog }),
     ...(nativeModel?.router === undefined ? {} : { modelRouter: nativeModel.router }),
     ...(nativeModel?.descriptor === undefined ? {} : { modelDescriptor: nativeModel.descriptor }),

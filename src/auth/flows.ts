@@ -17,6 +17,7 @@ export interface AuthorizeInput {
   readonly state?: string
   readonly nonce: string
   readonly installationId: string
+  readonly signal: AbortSignal
 }
 
 export interface ExchangeInput {
@@ -52,7 +53,8 @@ export interface BrowserSignInDescriptor {
   readonly state: boolean
   /** Redirect parameters besides `code` that the exchange needs. */
   readonly redirectParams?: readonly string[]
-  authorizeParams(input: AuthorizeInput): Readonly<Record<string, string>>
+  /** May call the vendor first, as a server that registers its clients at sign-in needs. */
+  authorizeParams(input: AuthorizeInput): Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>
   exchange(input: ExchangeInput): Promise<StoredCredential>
   readonly refresher?: CredentialRefresher
 }
@@ -127,7 +129,7 @@ export function createBrowserSignIn(descriptor: BrowserSignInDescriptor): SignIn
 
         const url = new URL(authorize)
         const nonce = randomUrlToken(32)
-        const params = descriptor.authorizeParams({ redirectUri, challenge: pkce.challenge, ...(state === undefined ? {} : { state }), nonce, installationId: await session.installationId() })
+        const params = await descriptor.authorizeParams({ redirectUri, challenge: pkce.challenge, ...(state === undefined ? {} : { state }), nonce, installationId: await session.installationId(), signal: session.signal })
         for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value)
         session.emit({ type: "open-url", url: url.toString(), redirect: listener === undefined ? "manual" : "loopback", ...(notice === undefined ? {} : { notice }) })
 

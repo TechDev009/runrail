@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { connectionDestination } from "../accounts/connections.ts"
-import { parseAccountRecord, type AccountRecord, type AccountStore } from "../accounts/types.ts"
+import { parseAccountRecord, type AccountRecord, type AccountReference, type AccountStore } from "../accounts/types.ts"
 import { boundedNativeId } from "../native/errors.ts"
 import type { CredentialRefresher, VaultCredentialBroker } from "./broker.ts"
 import { installationId } from "./installation.ts"
@@ -71,6 +71,8 @@ export interface SignInManagerOptions {
 interface Login {
   readonly loginId: string
   readonly flow: SignInFlow
+  /** Set for a sign-in built for one target: its result goes to this vault entry, and no account is made. */
+  readonly credential?: AccountReference
   readonly accountId: string
   readonly label: string
   readonly startedAt: number
@@ -135,8 +137,10 @@ export class SignInManager {
     this.timeoutMs = timeoutMs
   }
 
+  /** The registered sign-ins, and those built for one target while they run, so a host can check the page each opens. */
   list(): readonly SignInFlowInfo[] {
-    return Object.freeze([...this.flows.values()].map((flow) => Object.freeze({ id: flow.id, label: flow.label, preset: flow.preset, kind: flow.kind, authMode: flow.authMode, unofficial: flow.unofficial, browserHosts: flow.browserHosts })))
+    const running = [...this.logins.values()].filter((login) => login.credential !== undefined && active(login)).map((login) => login.flow)
+    return Object.freeze([...this.flows.values(), ...running].map((flow) => Object.freeze({ id: flow.id, label: flow.label, preset: flow.preset, kind: flow.kind, authMode: flow.authMode, unofficial: flow.unofficial, browserHosts: flow.browserHosts })))
   }
 
   /**
@@ -144,7 +148,24 @@ export class SignInManager {
    * sign-in of the same kind is cancelled first: it holds the callback address the new one needs.
    */
   start(flowId: string, target: { readonly accountId?: string; readonly label?: string } = {}): Promise<SignInSnapshot> {
-    const started = this.gate.then(() => this.begin(flowId, target))
+    const started = this.gate.then(() => {
+      const flow = this.flows.get(flowId)
+      if (flow === undefined) throw new SignInError("AUTH_FLOW_UNKNOWN", "no such sign-in")
+      return this.begin(flow, target)
+    })
+    this.gate = started.catch(() => {})
+    return started
+  }
+
+  /**
+   * Runs a sign-in built for one target, such as an MCP server, whose tokens go to the vault entry
+   * `credential` names. No account is made for it; status, cancel and submit work as for any other.
+   */
+  startFor(flow: SignInFlow, credential: AccountReference): Promise<SignInSnapshot> {
+    const started = this.gate.then(() => {
+      if (this.flows.has(flow.id)) throw new SignInError("AUTH_INVALID", "a sign-in id is registered twice")
+      return this.begin(flow, { accountId: credential.accountId, label: flow.label }, credential)
+    })
     this.gate = started.catch(() => {})
     return started
   }
@@ -183,14 +204,12 @@ export class SignInManager {
     await Promise.all([...this.logins.values()].map((login) => this.stop(login, "AUTH_CANCELLED")))
   }
 
-  private async begin(flowId: string, target: { readonly accountId?: string; readonly label?: string }): Promise<SignInSnapshot> {
+  private async begin(flow: SignInFlow, target: { readonly accountId?: string; readonly label?: string }, credential?: AccountReference): Promise<SignInSnapshot> {
     if (this.closed) throw new SignInError("AUTH_UNAVAILABLE", "sign-in is shutting down")
-    const flow = this.flows.get(flowId)
-    if (flow === undefined) throw new SignInError("AUTH_FLOW_UNKNOWN", "no such sign-in")
     const accountId = target.accountId ?? `signin-${flow.id}`
     const label = target.label ?? flow.label
     // Fails now rather than after the user has gone through the vendor's page.
-    await this.target(flow, accountId, label)
+    if (credential === undefined) await this.target(flow, accountId, label)
     for (const login of [...this.logins.values()]) if (login.flow.id === flow.id) await this.stop(login, "AUTH_CANCELLED")
     this.prune()
     if ([...this.logins.values()].filter(active).length >= MAX_ACTIVE_SIGN_INS) throw new SignInError("AUTH_LIMIT", "too many sign-ins are running")
@@ -198,6 +217,7 @@ export class SignInManager {
     const login: Login = {
       loginId: `login-${randomUUID()}`,
       flow,
+      ...(credential === undefined ? {} : { credential }),
       accountId,
       label,
       startedAt,
@@ -243,6 +263,14 @@ export class SignInManager {
 
   /** Writes the result to the vault, creating the account that names it when there is none yet. */
   private async keep(login: Login, credential: StoredCredential): Promise<void> {
+    if (login.credential !== undefined) {
+      try {
+        await this.broker.store(login.credential, credential)
+      } catch {
+        throw new SignInError("AUTH_STORE_FAILED", "the sign-in could not be saved")
+      }
+      return
+    }
     const target = await this.target(login.flow, login.accountId, login.label)
     try {
       if (target.created) await this.accounts.put(target.record)

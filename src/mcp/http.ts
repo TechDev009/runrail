@@ -8,12 +8,16 @@ export interface McpHttpTransportOptions {
   readonly maxMessageBytes?: number
   /** Required for non-loopback endpoints; remote auth/network policy stays caller-owned. */
   readonly allowRemote?: boolean
+  /** A bearer token read before each request, so a renewed sign-in is used without reconnecting. */
+  readonly authorization?: (signal: AbortSignal) => Promise<string>
 }
 
 /** Streamable HTTP MCP transport with explicit remote opt-in and caller-owned headers. */
 export class McpHttpTransport implements McpTransport {
   private readonly url: URL
   private readonly headers: Readonly<Record<string, string>>
+  private readonly authorization: ((signal: AbortSignal) => Promise<string>) | undefined
+  private bearer: string | undefined
   private readonly timeoutMs: number
   private readonly maxMessageBytes: number
   private queuedBytes = 0
@@ -30,6 +34,7 @@ export class McpHttpTransport implements McpTransport {
     validateOptions(options)
     this.url = new URL(options.url)
     this.headers = Object.freeze({ "content-type": "application/json", accept: "application/json, text/event-stream", ...(options.headers ?? {}) })
+    this.authorization = options.authorization
     this.timeoutMs = options.timeoutMs ?? 30_000
     this.maxMessageBytes = options.maxMessageBytes ?? 1_048_576
     this.maxQueuedBytes = Math.min(this.maxMessageBytes * 4, 16 * 1024 * 1024)
@@ -40,6 +45,11 @@ export class McpHttpTransport implements McpTransport {
     if (this.failure !== undefined) throw this.failure
     if (this.active.size >= 32) throw new McpTransportError("MCP_MESSAGE_LIMIT", "too many active MCP requests")
     if (typeof message !== "string" || message.length === 0 || Buffer.byteLength(message, "utf8") > this.maxMessageBytes) throw new McpTransportError("MCP_MESSAGE_LIMIT", "outgoing message exceeds its byte limit")
+    // A token that cannot be read fails this request only; the transport stays usable.
+    if (this.authorization !== undefined) {
+      this.bearer = await this.authorization(AbortSignal.timeout(this.timeoutMs))
+      if (this.closed) throw new McpTransportError("MCP_TRANSPORT_FAILED", "transport is closed")
+    }
     const controller = new AbortController()
     this.active.add(controller)
     const timer = setTimeout(() => controller.abort("MCP HTTP timeout"), this.timeoutMs)
@@ -49,6 +59,7 @@ export class McpHttpTransport implements McpTransport {
       const response = await fetch(this.url, { method: "POST", headers: this.requestHeaders(), body: message, redirect: "error", signal: controller.signal })
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined)
+        if (response.status === 401) throw new McpTransportError("MCP_UNAUTHORIZED", "MCP server refused the request's credentials")
         throw new McpTransportError("MCP_TRANSPORT_FAILED", "MCP HTTP request failed")
       }
       const sessionId = response.headers.get("mcp-session-id")
@@ -112,6 +123,7 @@ export class McpHttpTransport implements McpTransport {
   private requestHeaders(): Readonly<Record<string, string>> {
     return {
       ...this.headers,
+      ...(this.bearer === undefined ? {} : { authorization: `Bearer ${this.bearer}` }),
       ...(this.sessionId === undefined ? {} : { "mcp-session-id": this.sessionId }),
       ...(this.protocolVersion === undefined ? {} : { "mcp-protocol-version": this.protocolVersion }),
     }
@@ -224,6 +236,7 @@ function validateOptions(options: McpHttpTransportOptions): void {
     if (options.headers === null || typeof options.headers !== "object" || Array.isArray(options.headers) || Object.keys(options.headers).length > 32) throw new McpTransportError("MCP_TRANSPORT_INVALID", "MCP headers are invalid")
     for (const [name, value] of Object.entries(options.headers)) if (!/^[A-Za-z0-9-]{1,128}$/.test(name) || typeof value !== "string" || value.length > 4_096 || /[\r\n]/.test(value)) throw new McpTransportError("MCP_TRANSPORT_INVALID", "MCP header is invalid")
   }
+  if (options.authorization !== undefined && typeof options.authorization !== "function") throw new McpTransportError("MCP_TRANSPORT_INVALID", "MCP authorization is invalid")
   if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 120_000)) throw new McpTransportError("MCP_TRANSPORT_INVALID", "MCP timeout is invalid")
   if (options.maxMessageBytes !== undefined && (!Number.isSafeInteger(options.maxMessageBytes) || options.maxMessageBytes < 1 || options.maxMessageBytes > 16 * 1024 * 1024)) throw new McpTransportError("MCP_TRANSPORT_INVALID", "MCP message limit is invalid")
 }

@@ -72,6 +72,8 @@ import { MAX_CREDENTIAL_SECRET_BYTES, type CredentialVault } from "./auth/vault.
 import { CredentialStoreError } from "./auth/broker.ts"
 import { checkConnection, connectionCheckStatus, type ConnectionCheck } from "./connection-check.ts"
 import { SignInError } from "./auth/signin-types.ts"
+import { resolveAccountsRoot } from "./accounts/storage.ts"
+import { canonicalMcpUrl, McpOAuth, type McpClient } from "./mcp/oauth.ts"
 import { MAX_SIGN_IN_STATUS_WAIT_MS, type SignInManager, type SignInSnapshot } from "./auth/signin.ts"
 import { ShareError, advanceShareCursor, assertShareLive, createContentFreeShareBundle, createShareReference, parseShareAccessGrant, parseShareArtifact, revokeShare, type ShareMode, type SharePayloadPolicy, type ShareRole } from "./share/index.ts"
 import { presentControlEvent } from "./tools/presentation.ts"
@@ -250,6 +252,8 @@ interface ControlServices {
   readonly connectors: { readonly setup?: ConnectorSetupStore; readonly registry?: ConnectorRegistry; readonly endpointToken: string }
   /** Coding-tool sign-ins running in a terminal the person sees. */
   readonly logins: ToolLogins
+  /** Sign-ins to remote MCP servers; present with a credential vault. */
+  readonly mcpOAuth?: McpOAuth
   readonly githubCli?: string
   /** `codehosts.json` in the accounts folder, so every engine sharing that folder sees one answer per host. */
   readonly codeHosts: CodeHostStore
@@ -271,6 +275,8 @@ const MAX_LOGIN_READ_BYTES = 64 * 1024
 const MAX_LOGIN_INPUT_BYTES = 8 * 1024
 const SERVER_SCAN_TTL_MS = 2_000
 const BACKGROUND_STOP_TIMEOUT_MS = 10_000
+// Discovery makes a handful of bounded calls before the sign-in page is known.
+const MCP_DISCOVERY_MS = 30_000
 const BACKGROUND_OUTPUT_DEFAULT = 64 * 1024
 const BACKGROUND_OUTPUT_MAX = 256 * 1024
 const MAX_CONVERSATION_ITEMS = 4_096
@@ -359,6 +365,8 @@ async function serveControl(
   const githubCommand = options.githubCli === false ? undefined : (options.githubCli ?? "gh")
   // The vault opens with the native runtime below; a key is read only when a call is made.
   const secretVault: { vault?: CredentialVault } = {}
+  // Made before the session, which starts the behavior file's MCP servers with any saved sign-in.
+  const mcpOAuth = options.nativeCredentialVault === undefined ? undefined : new McpOAuth({ vault: options.nativeCredentialVault, root: options.nativeAccountsDir === undefined ? resolveAccountsRoot() : resolve(options.nativeAccountsDir) })
   const builtConnectors = options.connectorRegistry === undefined && connectorSetup !== undefined ? buildConnectorRegistry(await connectorSetup.read(), { resolve: (kind) => connectorSecret(kind, secretVault.vault, githubCommand) }) : undefined
   const connectorsToken = randomBytes(32).toString("hex")
   const connectorsEndpoint = builtConnectors !== undefined && builtConnectors.list().length > 0 && options.connectorTools?.mcpCommand !== undefined ? await createConnectorsEndpoint(options.connectorTools.mcpCommand) : undefined
@@ -372,6 +380,7 @@ async function serveControl(
     ...(computerTools === undefined ? {} : { computer: { bridge: computerBridge as ComputerBridge, ...(computerEndpoint === undefined ? {} : { mcpConfig: computerEndpoint.mcpConfig }) } }),
     ...(imageService === undefined ? {} : { images: { service: imageService, ...(imagesEndpoint === undefined ? {} : { mcpConfig: imagesEndpoint.mcpConfig }) } }),
     ...(builtConnectors === undefined ? {} : { connectors: { registry: builtConnectors, ...(connectorsEndpoint === undefined ? {} : { mcpConfig: connectorsEndpoint.mcpConfig }) } }),
+    ...(mcpOAuth === undefined ? {} : { mcpSignIns: mcpOAuth }),
   }, options.toolConnection))
   made.push(() => controller.close("control server failed"))
   live.bind(controller.session.snapshot.id)
@@ -530,6 +539,7 @@ async function serveControl(
     streams: new Set(),
     servers: {},
     logins: createToolLogins(),
+    ...(mcpOAuth === undefined ? {} : { mcpOAuth }),
     ...(browserBridge === undefined ? {} : { browser: browserBridge }),
     ...(threadsBridge === undefined ? {} : { threads: threadsBridge }),
     ...(computerBridge === undefined ? {} : { computer: computerBridge }),
@@ -760,7 +770,7 @@ async function handleRequest(
     if (!authorized(request.headers.get("authorization"), token))
       return jsonResponse({ ok: false, error: "CONTROL_UNAUTHORIZED" }, 401)
     try {
-      return jsonResponse({ ok: true, result: await storeSecret(request, nativeRuntime) })
+      return jsonResponse({ ok: true, result: await storeSecret(request, nativeRuntime, services.mcpOAuth) })
     } catch (error) {
       const publicValue = publicError(error)
       return jsonResponse({ ok: false, error: publicValue }, errorStatus(error), { "x-runrail-error-code": publicValue.code })
@@ -1228,6 +1238,32 @@ async function dispatch(
         ...(params.accountId === undefined ? {} : { accountId: requireNativeId(params.accountId, "accountId", 256) }),
         ...(params.label === undefined ? {} : { label: requireNativeText(params.label, "label", 160) }),
       })
+    }
+    case "auth.mcp.list":
+      return { servers: await requireMcpOAuth(services).list() }
+    case "auth.mcp.start": {
+      rejectRawCredentialFields(params)
+      const mcpOAuth = requireMcpOAuth(services)
+      const signIn = requireSignIn(nativeRuntime)
+      const url = requireMcpAddress(params.url)
+      const label = params.name === undefined ? new URL(url).host : requireNativeText(params.name, "name", 160)
+      const { flow, reference } = await mcpOAuth.signIn(url, label, AbortSignal.timeout(MCP_DISCOVERY_MS))
+      return signIn.startFor(flow, reference)
+    }
+    case "auth.mcp.signout": {
+      const url = requireMcpAddress(params.url)
+      return { url, removed: await requireMcpOAuth(services).signOut(url) }
+    }
+    case "auth.mcp.client.set": {
+      rejectRawCredentialFields(params)
+      const url = requireMcpAddress(params.url)
+      if (typeof params.clientId !== "string" || !/^[\x21-\x7e]{1,512}$/.test(params.clientId)) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "clientId is invalid")
+      const callbackPort = parseOptionalBound(params.callbackPort, 1_024, 65_535, "callbackPort")
+      return requireMcpOAuth(services).setClient(url, params.clientId, callbackPort)
+    }
+    case "auth.mcp.client.clear": {
+      const url = requireMcpAddress(params.url)
+      return { url, removed: await requireMcpOAuth(services).clearClient(url) }
     }
     case "auth.login.status":
       return requireSignIn(nativeRuntime).status(
@@ -2130,7 +2166,7 @@ async function connectorSetupRemove(services: ControlServices, runtime: NativeCo
   return { id, removed: true }
 }
 
-async function storeSecret(request: Request, runtime: NativeControlRuntime): Promise<AccountRecord | ConnectionEntry | { readonly connector: ConnectorKind; readonly connected: true }> {
+async function storeSecret(request: Request, runtime: NativeControlRuntime, mcpOAuth: McpOAuth | undefined): Promise<AccountRecord | ConnectionEntry | { readonly connector: ConnectorKind; readonly connected: true } | { readonly url: string; readonly client: McpClient }> {
   const broker = runtime.vaultBroker
   if (broker === undefined) throw new ControlRpcError("CONTROL_CAPABILITY_UNAVAILABLE", 409, "no credential vault is configured")
   let value: unknown
@@ -2141,11 +2177,16 @@ async function storeSecret(request: Request, runtime: NativeControlRuntime): Pro
     throw new ControlRpcError("CONTROL_INVALID_JSON", 400, "secret request JSON cannot be parsed")
   }
   const keys = isRecord(value) ? Object.keys(value) : []
-  const owners = ["accountId", "connectionId", "connectorId"].filter((key) => keys.includes(key))
-  if (!isRecord(value) || keys.some((key) => key !== "accountId" && key !== "connectionId" && key !== "connectorId" && key !== "secret") || owners.length !== 1) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "secret request must contain accountId, connectionId or connectorId, and secret")
+  const owners = ["accountId", "connectionId", "connectorId", "mcpClientId"].filter((key) => keys.includes(key))
+  if (!isRecord(value) || keys.some((key) => key !== "secret" && !owners.includes(key)) || owners.length !== 1) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "secret request must contain accountId, connectionId, connectorId or mcpClientId, and secret")
   // Pasted keys commonly arrive with a trailing newline or surrounding spaces.
   const secret = typeof value.secret === "string" ? value.secret.trim() : ""
   if (secret.length === 0 || Buffer.byteLength(secret, "utf8") > MAX_CREDENTIAL_SECRET_BYTES || /[\0-\x1f\x7f]/.test(secret)) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "secret is invalid")
+  if (value.mcpClientId !== undefined) {
+    if (mcpOAuth === undefined) throw new ControlRpcError("CONTROL_CAPABILITY_UNAVAILABLE", 409, "no credential vault is configured")
+    if (typeof value.mcpClientId !== "string" || !/^mcp-oauth:[0-9a-f]{32}$/.test(value.mcpClientId)) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "mcpClientId is invalid")
+    return mcpOAuth.setClientSecret(value.mcpClientId, secret)
+  }
   if (value.connectorId !== undefined) {
     // GitHub answers with the person's own `gh` sign-in; only the other services take a key.
     if (!isConnectorKind(value.connectorId) || value.connectorId === "github") throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "connector does not take a pasted key")
@@ -2191,6 +2232,20 @@ async function submitSignInInput(request: Request, runtime: NativeControlRuntime
 function requireSignIn(runtime: NativeControlRuntime): SignInManager {
   if (runtime.signIn === undefined) throw new ControlRpcError("CONTROL_CAPABILITY_UNAVAILABLE", 409, "no credential vault is configured")
   return runtime.signIn
+}
+
+function requireMcpOAuth(services: ControlServices): McpOAuth {
+  if (services.mcpOAuth === undefined) throw new ControlRpcError("CONTROL_CAPABILITY_UNAVAILABLE", 409, "no credential vault is configured")
+  return services.mcpOAuth
+}
+
+function requireMcpAddress(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "url is invalid")
+  try {
+    return canonicalMcpUrl(value)
+  } catch {
+    throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "url must be an https address")
+  }
 }
 
 function requireLoginId(value: unknown): string {
@@ -2391,7 +2446,7 @@ function parseNativeCapabilityList(value: unknown, name: string, maxItems: numbe
 }
 
 function rejectRawCredentialFields(params: Record<string, unknown>): void {
-  const forbidden = ["secret", "token", "apiKey", "password", "accessToken", "refreshToken", "credential"]
+  const forbidden = ["secret", "token", "apiKey", "password", "accessToken", "refreshToken", "credential", "clientSecret"]
   if (Object.keys(params).some((key) => forbidden.includes(key))) throw new ControlRpcError("CONTROL_INVALID_INPUT", 400, "credential values must use an account reference")
 }
 

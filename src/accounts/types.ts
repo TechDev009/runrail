@@ -165,11 +165,13 @@ export function createAccountCredentialResolver(store: AccountStore, broker: Cre
 
 
 /**
- * Ids the vault keeps for Runrail's own keys (a connector's key is `connector:<kind>`). Accounts and
- * tool connections share the vault with them, so they may never take one.
+ * Ids the vault keeps for Runrail's own keys (a connector's key is `connector:<kind>`, an MCP
+ * server's sign-in `mcp-oauth:<hash>`). Accounts and tool connections share the vault with them,
+ * so they may never take one.
  */
 export function isReservedCredentialId(id: string): boolean {
-  return id.toLowerCase().startsWith("connector:")
+  const lower = id.toLowerCase()
+  return lower.startsWith("connector:") || lower.startsWith("mcp-oauth:")
 }
 
 export function parseAccountReference(value: unknown): AccountReference {

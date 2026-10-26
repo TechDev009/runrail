@@ -12,6 +12,18 @@ All notable changes to Runrail will be documented here.
   with the keyword matches. How close counts as the same thing is measured for
   each model when you pick it. Off until you pick a model, and it falls back
   to keywords when the model does not answer.
+- Sign in to a remote MCP server in the browser. A server that answers 401
+  now reports `MCP_SIGN_IN_REQUIRED` instead of a transport failure, and
+  `auth.mcp.start` signs in the way the MCP authorization spec describes:
+  Runrail registers itself with the server's authorization server, signs in
+  with PKCE, and keeps the tokens, bound to that server, in the credential
+  vault, renewing them before they run out. A token from `bearerEnv` that the
+  server refuses now reports `MCP_TOKEN_REJECTED`.
+- An MCP server whose authorization server does not let apps register
+  themselves, such as GitHub's, signs in with an app you registered:
+  `auth.mcp.client.set` names its app ID and callback port, and its secret goes
+  only through `POST /secret` (`mcpClientId`) into the credential vault. Such
+  a server with no app named reports `AUTH_CLIENT_REQUIRED`.
 
 ### Fixes
 

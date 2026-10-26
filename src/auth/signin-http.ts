@@ -67,13 +67,38 @@ export async function signInPost(endpoint: URL, body: SignInRequestBody, signal:
     if (signal.aborted) throw new SignInError("AUTH_CANCELLED", "sign-in was cancelled")
     throw new SignInError("AUTH_NETWORK", timeout.aborted ? "sign-in endpoint did not answer in time" : "sign-in endpoint cannot be reached")
   }
+  return { status: response.status, body: jsonObject(bytes) }
+}
+
+/** One GET of a vendor's published metadata, read the same bounded way. A redirect is refused. */
+export async function signInGet(endpoint: URL, signal: AbortSignal, timeoutMs: number = DEFAULT_SIGN_IN_REQUEST_MS): Promise<SignInResponse> {
+  if (signal.aborted) throw new SignInError("AUTH_CANCELLED", "sign-in was cancelled")
+  const timeout = AbortSignal.timeout(timeoutMs)
+  let response: Response
+  let bytes: Uint8Array
+  try {
+    response = await fetch(endpoint, { method: "GET", redirect: "manual", signal: AbortSignal.any([signal, timeout]), headers: { accept: "application/json", "user-agent": RUNRAIL_USER_AGENT } })
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => {})
+      return { status: response.status, body: undefined }
+    }
+    bytes = await readBounded(response)
+  } catch (error) {
+    if (error instanceof SignInError) throw error
+    if (signal.aborted) throw new SignInError("AUTH_CANCELLED", "sign-in was cancelled")
+    throw new SignInError("AUTH_NETWORK", timeout.aborted ? "sign-in endpoint did not answer in time" : "sign-in endpoint cannot be reached")
+  }
+  return { status: response.status, body: jsonObject(bytes) }
+}
+
+function jsonObject(bytes: Uint8Array): Record<string, unknown> | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
   } catch {
-    parsed = undefined
+    return undefined
   }
-  return { status: response.status, body: parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined }
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined
 }
 
 async function readBounded(response: Response): Promise<Uint8Array> {

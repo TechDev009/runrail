@@ -1077,7 +1077,15 @@ tools, regardless of `readOnlyHint`.
   `bearerEnv` optionally names the variable that holds the access token; the
   engine reads it when it connects and sends `authorization: Bearer <value>`
   to that address only. An unset or empty variable fails that server with
-  `MCP_TOKEN_MISSING`. `bearerEnv` without `url` is refused.
+  `MCP_TOKEN_MISSING`, and a token the server refuses (HTTP 401) with
+  `MCP_TOKEN_REJECTED`. `bearerEnv` without `url` is refused.
+- Address without `bearerEnv`: a server that answers 401 fails with
+  `MCP_SIGN_IN_REQUIRED`, which `auth.mcp.start` (see the control protocol's
+  sign-in section) fixes. Once signed in, the engine reads the stored token
+  before each request, renewing it first when it is about to run out, and
+  sends it to that address only. A sign-in that can no longer be renewed
+  fails the server with `MCP_SIGN_IN_REQUIRED` again; a credential store that
+  cannot be read, with `MCP_SIGN_IN_UNAVAILABLE`.
 
 Only the native backend connects to them, in the session's workspace, when
 the session starts. Each server's tools are named `<name>.<tool>`. A server

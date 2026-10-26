@@ -771,6 +771,14 @@ in place of `accountId` (one of the two, never both). The connection must have
 `authMode: "api-key"`; the result is the connection as `connection.list` shows
 it. See [Coding-tool sign-in](#coding-tool-sign-in).
 
+A built-in connector's key goes with `connectorId` (`linear`, `jira`, or
+`slack`; `github` takes none), and the result is `{ connector, connected:
+true }`. The secret of an app named for an MCP server's sign-in goes with
+`mcpClientId`, the `id` that `auth.mcp.client.set` returned
+(`mcp-oauth:<32 hex>`), and the result is `{ url, client }`; an id with no app
+named is refused with `AUTH_INVALID` (400). Exactly one of `accountId`,
+`connectionId`, `connectorId`, or `mcpClientId` is sent.
+
 | HTTP | Code | When |
 | --- | --- | --- |
 | 400 | `CONTROL_INVALID_JSON`, `CONTROL_INVALID_INPUT` | body is not a JSON object, has an unknown field, or the key or account is not acceptable |
@@ -1325,7 +1333,8 @@ Sign-in codes: `AUTH_FLOW_UNKNOWN`, `AUTH_LOGIN_NOT_FOUND` (404);
 nothing was kept); and with 409 or as an event code: `AUTH_LOGIN_FINISHED`,
 `AUTH_LIMIT`, `AUTH_ACCOUNT_MISMATCH`, `AUTH_UNAVAILABLE`, `AUTH_CANCELLED`,
 `AUTH_TIMEOUT`, `AUTH_DENIED`, `AUTH_EXPIRED`, `AUTH_CODE_REJECTED`,
-`AUTH_SCOPE_MISSING`, `AUTH_RESPONSE_INVALID`, `AUTH_NETWORK`, `AUTH_FAILED`.
+`AUTH_SCOPE_MISSING`, `AUTH_RESPONSE_INVALID`, `AUTH_NETWORK`,
+`AUTH_UNSUPPORTED`, `AUTH_CLIENT_REQUIRED`, `AUTH_FAILED`.
 The message is always `sign-in failed`.
 
 `auth.logout` deletes the stored credential of an `api-key`, `oauth`, or
@@ -1333,6 +1342,51 @@ The message is always `sign-in failed`.
 refuses other auth modes (`CONTROL_INVALID_INPUT`) and revoked accounts
 (`CONTROL_ACCOUNT_REVOKED`). Runrail does not call the vendor to revoke the
 tokens; remove the grant in the vendor's own account settings to do that.
+
+### MCP server sign-in
+
+A remote MCP server that wants a sign-in is signed in to the way the MCP
+authorization spec describes, with no account made for it:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `auth.mcp.start` | `{ url, name? }` | a sign-in snapshot (`preset: "mcp-oauth"`, `accountId: "mcp-oauth:<hash>"`); follow it with `auth.login.status` and end it with `auth.login.cancel` |
+| `auth.mcp.list` | - | `{ servers: [{ url, signedIn, updatedAt, client? }] }`, the addresses with a saved sign-in or a named app; `client` is `{ id, callbackPort?, secret }`, where `secret` says only whether one is kept |
+| `auth.mcp.signout` | `{ url }` | `{ url, removed }`; the tokens are deleted from the vault, and a named app stays |
+| `auth.mcp.client.set` | `{ url, clientId, callbackPort? }` | `{ id, url, client }`; names an app the person registered with the authorization server, used in place of registering one |
+| `auth.mcp.client.clear` | `{ url }` | `{ url, removed }`; forgets the app and its secret, and keeps the sign-in |
+
+`url` is `https`, or `http` on this machine (`CONTROL_INVALID_INPUT`
+otherwise); a fragment is dropped and a bare host loses its trailing slash.
+Before answering, the engine asks the server: an unauthenticated
+`initialize` reads its `WWW-Authenticate` challenge, then its protected
+resource metadata (RFC 9728, from the challenge or the well-known address),
+then its authorization server's metadata (RFC 8414 or OpenID). It refuses
+with `AUTH_UNSUPPORTED` a server that asks for no sign-in and an
+authorization server without PKCE (`S256`), with `AUTH_CLIENT_REQUIRED` one
+without client registration when no app is named for the server, and with
+`AUTH_RESPONSE_INVALID` metadata naming another server as the resource. The
+sign-in then registers Runrail as a public client for its one callback
+address (RFC 7591), or uses the app named with `auth.mcp.client.set`, opens
+the authorization server's page with PKCE,
+`state`, and `resource` set to the server (RFC 8707), and asks for the
+tokens with the same `resource`. While it runs, `auth.flows` lists it as
+`mcp-<id>` with the authorization server's host as its only `browserHosts`.
+The tokens and the issued client id go to the credential vault under
+`mcp-oauth:<hash>`, an id no account may take; the token address and resource
+needed to renew them go to `mcp-oauth.json` beside the accounts, which holds
+no secret.
+
+A named app's id is any 1 to 512 printable ASCII characters. Its callback is
+`http://127.0.0.1:<callbackPort>/callback`, so register that address with the
+app; with no `callbackPort` the port is picked when the sign-in starts, which
+suits only an authorization server that accepts any loopback port (RFC 8252).
+`clientId` is checked as `CONTROL_INVALID_INPUT`, and a `clientSecret` in the
+params is refused the same way: an app's secret enters only through `POST
+/secret` with `mcpClientId`, and goes to the vault under
+`mcp-oauth:<hash>:client`. A kept secret is sent with the token requests as
+`client_secret`, renewals included. Naming another app id forgets the old
+app's secret.
 
 Built-in sign-ins:
 
