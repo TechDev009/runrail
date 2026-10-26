@@ -4,14 +4,14 @@ import { join, resolve } from "node:path"
 const repositoryRoot = resolve(".")
 const packDir = resolve(process.env.NIFRA_PACK_DIR ?? "/tmp/nifra-runrail-pack")
 const packageFiles = {
-  "@nifrajs/agent-protocol": "nifrajs-agent-protocol-5.3.0.tgz",
-  "@nifrajs/agent": "nifrajs-agent-5.3.0.tgz",
-  "@nifrajs/agent-review": "nifrajs-agent-review-5.3.0.tgz",
-  "@nifrajs/core": "nifrajs-core-5.3.0.tgz",
-  "@nifrajs/jobs": "nifrajs-jobs-5.3.0.tgz",
-  "@nifrajs/coding-agent": "nifrajs-coding-agent-5.3.0.tgz",
-  "@nifrajs/mcp": "nifrajs-mcp-5.3.0.tgz",
-  "@nifrajs/pi": "nifrajs-pi-5.3.0.tgz",
+  "@nifrajs/agent-protocol": "nifrajs-agent-protocol-5.8.0.tgz",
+  "@nifrajs/agent": "nifrajs-agent-5.8.0.tgz",
+  "@nifrajs/agent-review": "nifrajs-agent-review-5.8.0.tgz",
+  "@nifrajs/core": "nifrajs-core-5.8.0.tgz",
+  "@nifrajs/jobs": "nifrajs-jobs-5.8.0.tgz",
+  "@nifrajs/coding-agent": "nifrajs-coding-agent-5.8.0.tgz",
+  "@nifrajs/mcp": "nifrajs-mcp-5.8.0.tgz",
+  "@nifrajs/pi": "nifrajs-pi-5.8.0.tgz",
 } as const
 
 const tarballs = Object.fromEntries(

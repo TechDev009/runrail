@@ -55,5 +55,5 @@ fixture paths itself. This keeps release certification fail-closed while
 leaving filesystem ownership and live vendor checks with the operator.
 
 The default packed track runs `bun run test:packed`. It creates a temporary
-Runrail tarball, installs it with the eight pinned Nifra 5.3.0 artifacts, and
+Runrail tarball, installs it with the eight pinned Nifra 5.8.0 artifacts, and
 executes the external adapter example through packed public exports.

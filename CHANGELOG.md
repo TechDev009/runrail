@@ -4,6 +4,9 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+- Built on the public Nifra 5.8.0 packages (was 5.3.0), and `runrail new`
+  starters scaffold with `create-nifra@5.8.0`.
+
 ### Fixes
 
 - The Linear connector sends your personal API key the way Linear's API

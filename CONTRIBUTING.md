@@ -10,7 +10,7 @@ Requirements:
 
 - Bun 1.3 or newer.
 - A checkout of Runrail.
-- Published Nifra `5.3.0` packages, installed by `bun install`.
+- Published Nifra `5.8.0` packages, installed by `bun install`.
 
 ```sh
 bun install
@@ -18,7 +18,7 @@ bun run typecheck
 bun test
 ```
 
-For packed-consumer work, provide the eight Nifra `5.3.0` tarballs outside the
+For packed-consumer work, provide the eight Nifra `5.8.0` tarballs outside the
 repository and run:
 
 ```sh

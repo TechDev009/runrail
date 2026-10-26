@@ -190,7 +190,7 @@ const session = await createRunrailSession({ cwd: process.cwd(), backend: "nativ
 See the [control protocol](docs/control-protocol.md), the
 [desktop capabilities](docs/control-desktop-capabilities.md), and the
 [library API](docs/library.md). Runrail is built on the public
-[Nifra](https://github.com/nifrajs/nifra) 5.3.0 packages.
+[Nifra](https://github.com/nifrajs/nifra) 5.8.0 packages.
 
 ## Nifra in Runrail
 
@@ -254,7 +254,7 @@ bun test
 
 `bun run test:isolated` runs every test file in a fresh process with a watchdog, for
 reproducible release checks. `bun run test:packed` installs a packed Runrail with the published
-Nifra artifacts and runs the external adapter example against it; put the Nifra 5.3.0 tarballs
+Nifra artifacts and runs the external adapter example against it; put the Nifra 5.8.0 tarballs
 in `/tmp/nifra-runrail-pack` or set `NIFRA_PACK_DIR`. `bun run source:check` rejects workspace
 aliases and imports of unpublished or source-only Nifra code, and `bun run package:check`
 validates the package manifest. See [CONTRIBUTING.md](CONTRIBUTING.md).

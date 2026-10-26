@@ -5,11 +5,11 @@
     "": {
       "name": "runrail",
       "dependencies": {
-        "@nifrajs/agent": "5.3.0",
-        "@nifrajs/agent-protocol": "5.3.0",
-        "@nifrajs/coding-agent": "5.3.0",
-        "@nifrajs/mcp": "5.3.0",
-        "@nifrajs/pi": "5.3.0",
+        "@nifrajs/agent": "5.8.0",
+        "@nifrajs/agent-protocol": "5.8.0",
+        "@nifrajs/coding-agent": "5.8.0",
+        "@nifrajs/mcp": "5.8.0",
+        "@nifrajs/pi": "5.8.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.0",
@@ -24,21 +24,21 @@
     },
   },
   "packages": {
-    "@nifrajs/agent": ["@nifrajs/agent@5.3.0", "", { "dependencies": { "@nifrajs/core": "5.3.0" } }, "sha512-/8y9QqPHmAPFO/VV4KvdRj15+0cyxIkOZuFBkLV1ZRGLnxoGyCYabcWifkFKlM2IZjzBBR2nziB9bGeePeMW4g=="],
+    "@nifrajs/agent": ["@nifrajs/agent@5.8.0", "", { "dependencies": { "@nifrajs/core": "5.8.0" } }, "sha512-r1okxhoVlW4vkLzhzaX0CtEje761oDX6zHpKc6yHuhb2Hyuhs9mTN268a0Wi5l4vlPZ8Liz6n5bJojzW3/kqUg=="],
 
-    "@nifrajs/agent-protocol": ["@nifrajs/agent-protocol@5.3.0", "", {}, "sha512-X398F427I+U34e4UFcCPIgWmq3BlcyLn1DqLkGrqyGFOampzr2EQqf5OmtU43URsp94+dowx+xpjSoygu7Qd6A=="],
+    "@nifrajs/agent-protocol": ["@nifrajs/agent-protocol@5.8.0", "", {}, "sha512-kWMkT8afuBDmfhXNPJnBOn+J38xU9yYQshRhA0nufQtEpKx5QLI160fBQusLlUmgLfNngB5pvRbXnFslhXkf/A=="],
 
-    "@nifrajs/agent-review": ["@nifrajs/agent-review@5.3.0", "", {}, "sha512-Je7m8t8B9JJQmZGnXrAaMsTllEWK0YFOtNBoXAKZyhzZaaj791tm4/k9W0JouSPthzcGVjihmz5yzlRSclyAcw=="],
+    "@nifrajs/agent-review": ["@nifrajs/agent-review@5.8.0", "", {}, "sha512-owej6m6qDulz3ruCygdQpY+4jIKgi1m/Gq5sVZzv0OoADaXCmKTBRLp77N08uUY+K6oPKiWPSc3Wv9o9P4J7wg=="],
 
-    "@nifrajs/coding-agent": ["@nifrajs/coding-agent@5.3.0", "", { "dependencies": { "@nifrajs/agent": "5.3.0", "@nifrajs/agent-protocol": "5.3.0", "@nifrajs/agent-review": "5.3.0", "@nifrajs/jobs": "5.3.0", "@nifrajs/pi": "5.3.0" }, "bin": { "nifra-agent": "dist/cli.js" } }, "sha512-TzZScGeiXsF9o9Xfm2q6h0sQYuDvvNLHqYPT0X0HQa0MCnt40Y3RzDCV3AuRcxu2uvjxcL5FSZrHzNZeOfXvdA=="],
+    "@nifrajs/coding-agent": ["@nifrajs/coding-agent@5.8.0", "", { "dependencies": { "@nifrajs/agent": "5.8.0", "@nifrajs/agent-protocol": "5.8.0", "@nifrajs/agent-review": "5.8.0", "@nifrajs/jobs": "5.8.0", "@nifrajs/pi": "5.8.0" }, "bin": { "nifra-agent": "dist/cli.js" } }, "sha512-CvGNLz3dQjttq1jP2t97lc5HtmsBMH+K4GDDjgJYBIB4KJaOmxL0Y5fRGykcgjKffB+wiF8aCjXQKAy5QCO26A=="],
 
-    "@nifrajs/core": ["@nifrajs/core@5.3.0", "", {}, "sha512-9OAcOUWcsz7bI3Pt1pjOJKqCS1IYjWaVRNE/MmFIy+0nL9uknEoWVSimyzflMlErsJlJO4GgccO6DU3NqBLotQ=="],
+    "@nifrajs/core": ["@nifrajs/core@5.8.0", "", {}, "sha512-/9rTYjjHJKlfsGP1bgLFoFIb/ZCAcE6cSEZCd6owoaLLuqZn59JzPqStChUbxsmWVWyPoMseitS9nL8rbr04xw=="],
 
-    "@nifrajs/jobs": ["@nifrajs/jobs@5.3.0", "", {}, "sha512-P/97vgLFeTfaSokAe5chbur80m/hNh6XO/eXVab4yls91q13/Jhi/bDaeA5nNuIZEW6YyesJ4sF4tdlqZhvuGg=="],
+    "@nifrajs/jobs": ["@nifrajs/jobs@5.8.0", "", {}, "sha512-m1W5CSBF8EbLBLgL6fy4CMvCW6o2lM3I3h7eYcO+fjO7uBeKQNNeF6GlX218cQgt+H0xDlcUxdkeOb7XESO72A=="],
 
-    "@nifrajs/mcp": ["@nifrajs/mcp@5.3.0", "", { "dependencies": { "@nifrajs/agent-protocol": "5.3.0" }, "peerDependencies": { "@nifrajs/agent": "^5.3.0", "@nifrajs/core": "^5.3.0" }, "optionalPeers": ["@nifrajs/agent", "@nifrajs/core"] }, "sha512-NKInNPwwRBevWDXaTUsCKTmXTxP+SVlt2D+unUVH6rqM0ILktxXtn92b22YcREv1W8xRSmGrZxfD+XBG0ugSDA=="],
+    "@nifrajs/mcp": ["@nifrajs/mcp@5.8.0", "", { "dependencies": { "@nifrajs/agent-protocol": "5.8.0" }, "peerDependencies": { "@nifrajs/agent": "^5.8.0", "@nifrajs/core": "^5.8.0" }, "optionalPeers": ["@nifrajs/agent", "@nifrajs/core"] }, "sha512-DctPpIRUHvEXfItXYBYiqHwixu4jUmrQu1lAb4czIoRYmEZtuZat69fanxnmaB+xMQpvC5va/rj3Pf7IMJBxFw=="],
 
-    "@nifrajs/pi": ["@nifrajs/pi@5.3.0", "", { "dependencies": { "@nifrajs/agent-protocol": "5.3.0" } }, "sha512-bzuZ8j/MeLUditXv3uGQjF9Um5V3VyGfR2JaWSRzSaAkUGEuY5Y2v4YkSUwPifM+nUczFKN6giaB6BMtLTVMDw=="],
+    "@nifrajs/pi": ["@nifrajs/pi@5.8.0", "", { "dependencies": { "@nifrajs/agent-protocol": "5.8.0" } }, "sha512-p2HFWzIKInFuk4iQfsTyEW5laTcJ8Af/3S4kfdMCBwAllZhAibrm+n7REDnCcPda9BXvkvH1d1xBIhuAfn/00g=="],
 
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 

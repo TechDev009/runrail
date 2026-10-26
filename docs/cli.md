@@ -115,7 +115,7 @@ runrail new --list
 
 | Starter | Made by | Runs |
 |---|---|---|
-| `nifra` (default, recommended) | the authors of Runrail | `create-nifra@5.3.0`: a full-stack site with React |
+| `nifra` (default, recommended) | the authors of Runrail | `create-nifra@5.8.0`: a full-stack site with React |
 | `vite` | the Vite team | `create-vite@9.2.1 --template react-ts` |
 | `next` | Vercel | `create-next-app@16.3.8` with the App Router, TypeScript, Tailwind CSS, and ESLint |
 | `empty` | Runrail | nothing: an empty folder with a git repository |

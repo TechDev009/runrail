@@ -27,7 +27,7 @@ const STARTERS: RunrailStarter[] = [
     description: "A full-stack TypeScript app: typed API routes and a React frontend, with Nifra's checks and agent tools set up.",
     maker: "the authors of Runrail",
     recommended: true,
-    creator: "create-nifra@5.3.0",
+    creator: "create-nifra@5.8.0",
   },
   { id: "vite", label: "Vite + React", description: "A React and TypeScript app on Vite.", maker: "the Vite team", recommended: false, creator: "create-vite@9.2.1" },
   { id: "next", label: "Next.js", description: "A Next.js app with the App Router, TypeScript, Tailwind CSS, and ESLint.", maker: "Vercel", recommended: false, creator: "create-next-app@16.3.8" },
