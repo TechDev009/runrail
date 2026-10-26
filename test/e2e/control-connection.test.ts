@@ -207,6 +207,7 @@ describe("control connections", () => {
       presetId: "custom-openai-chat",
       models: [{ id: "chat-model", name: "Chat Model", contextTokens: 64_000, source: "snapshot" }, { id: "snapshot-only", contextTokens: 8_000, source: "snapshot" }],
       images: [],
+      embeddings: [],
       live: { ok: false, code: "CREDENTIAL_MISSING" },
       manualEntry: true,
     })
@@ -217,12 +218,13 @@ describe("control connections", () => {
 
     const models = await rpc(running, "connection.models", { connectionId: "conn-local" })
     expect(models.status).toBe(200)
-    // The live list wins, non-chat models are dropped, the bundle fills the name.
+    // The live list wins, non-chat models are dropped from the chat list, the bundle fills the name.
     expect(models.body.result).toEqual({
       connectionId: "conn-local",
       presetId: "custom-openai-chat",
       models: [{ id: "chat-model", name: "Chat Model", contextTokens: 32_000, source: "live" }],
       images: [],
+      embeddings: [{ id: "text-embedding-fixture" }],
       live: { ok: true, code: "OK" },
       manualEntry: true,
     })

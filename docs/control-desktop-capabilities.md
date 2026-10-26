@@ -546,13 +546,34 @@ project), in one SQLite file shared by every engine, `~/.runrail/memory/`
 (embedders pass `memoryDir`). An engine never lists another project's memories.
 
 - `memory.status` returns `{ provider: { kind: local | mcp, name? }, health: {
-  ok, detail? }, counts: { project, person } }`.
+  ok, detail? }, counts: { project, person }, semantic? }`. `semantic` is
+  present once an embedding model is picked: `{ connectionId, model, floor?,
+  indexed, pending, indexing, problem? }`, where `problem` is the last reason a call to
+  the model failed, in Runrail's words.
 - `memory.recall { query, scopes?, limit? }` returns `{ hits: [{ id, scope,
-  text, source, score, from: local | mcp }], fellBack? }`: memories sharing at
-  least a third of the query's words (three letters or more, common words left
-  out, stems matched), counted out of at most four of them so a long message
-  needs two in common, best first, at most `limit` (default 3, up to 10).
-  `fellBack` names why the external server did not answer and local memory did.
+  text, source, score, from: local | mcp, match? }], fellBack? }`: memories
+  sharing at least a third of the query's words (three letters or more, common
+  words left out, stems matched), counted out of at most four of them so a long
+  message needs two in common, best first, at most `limit` (default 3, up to
+  10). `fellBack` names why the external server did not answer and local memory
+  did.
+- Recall by meaning is off until `memory.settings.set { embeddings: {
+  connectionId, model } }` picks an embedding model on one of the person's
+  connections (`connection.models` lists them as `embeddings`). The engine
+  checks it with one call first and refuses a model that does not embed
+  (`CONTROL_MEMORY_UNAVAILABLE`, 503). That call embeds twelve unrelated
+  sentences, and the model's similarity floor is their mean similarity plus
+  2.75 standard deviations, between 0.2 and 0.9; it is saved with the
+  settings as `floor` and returned with them. Local memories are then embedded in the
+  background, 64 at a time, through the connection's OpenAI-style
+  `embeddings` endpoint with its own key; the vectors stay in the memory
+  file, never the key. Recall embeds the query (waiting at most 2.5 s) and
+  joins the closest memories (cosine similarity at or above the model's floor,
+  0.5 for settings saved without one) with the keyword hits by reciprocal
+  rank fusion; `match` says which found it: `keyword`,
+  `meaning`, or `both`. A model that fails, or a connection turned off, leaves
+  recall to keywords and sets `semantic.problem`. `{ embeddings: null }` turns
+  it off and drops the vectors; a new model drops the old model's.
 - `turn.enqueue { message, recall: true }` appends what the message recalls
   (up to 3, waiting at most 4 s for an external server) as a block after the
   message, so every route reads it and the timeline can show it:
@@ -567,7 +588,8 @@ project), in one SQLite file shared by every engine, `~/.runrail/memory/`
 - `memory.add { scope, text, source?: manual | suggested }`, `memory.update {
   id, text }`, `memory.forget { id }`, and `memory.list { scope?, query?,
   sourceId?, limit?, before? }` (newest first).
-- `memory.settings.get` and `memory.settings.set { provider }`: `local`,
+- `memory.settings.get` and `memory.settings.set { provider?, embeddings? }`
+  (either or both). `provider`: `local`,
   `server-memory` (the official `@modelcontextprotocol/server-memory` through
   `npx`), or `{ name, command, args?, inherit?, mapping }` or `{ name, url,
   mapping }`. A mapping names the server's tools for `recall`, `add`, `forget`

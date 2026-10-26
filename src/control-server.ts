@@ -55,6 +55,7 @@ import { linkDependencies, mineCandidates, validateCase } from "./evals/mine.ts"
 import { EvalRuns } from "./evals/run.ts"
 import { EvalError, MAX_CASES, parseSuite, SuiteStore } from "./evals/suite.ts"
 import { memoryLabel, recallBlock } from "./memory/block.ts"
+import { embedTexts } from "./memory/embeddings.ts"
 import { MemoryService, resolveProjectKey } from "./memory/service.ts"
 import { parseContact, parseMessage, parseSubscription, PushError, sendPush, vapidKeys, type Vapid } from "./push/web-push.ts"
 import { MemoryError } from "./memory/types.ts"
@@ -509,6 +510,14 @@ async function serveControl(
           dir: resolve(options.memoryDir ?? join(homedir(), ".runrail", "memory")),
           root: workspaceRoot,
           ...(gh === undefined ? {} : { gh: async (args: readonly string[]) => (await runGitHubCli({ command: gh, cwd: workspaceRoot }, args, { maxOutput: 8 * 1024 * 1024 })).text }),
+          embed: async (choice, texts, signal) => {
+            // A connection turned off or revoked sends nothing, as an image model on it would not.
+            const usable = (await nativeRuntime.connections.list({ enabledOnly: true })).connections.some((entry) => entry.connectionId === choice.connectionId)
+            if (!usable) throw new MemoryError("MEMORY_UNAVAILABLE", "The embedding model's connection is off or gone. Turn it on in Settings > Connections, or pick another model.")
+            const account = await nativeRuntime.accounts.get(choice.connectionId)
+            if (account === undefined) throw new MemoryError("MEMORY_UNAVAILABLE", "The embedding model's connection is gone. Pick another model.")
+            return embedTexts(connectionFor(account, nativeRuntime.credentialResolver).options, choice.model, texts, signal)
+          },
         })
         return this.service
       },
@@ -1655,8 +1664,9 @@ async function dispatch(
         connectionId: probe.connection.connectionId,
         presetId: probe.connection.presetId,
         models: mergeModelList(probe.models, services.connections.metadata.models(probe.connection.presetId)),
-        // Only a live list names image models; nothing about them is bundled.
+        // Only a live list names image and embedding models; nothing about them is bundled.
         images: probe.images ?? [],
+        embeddings: probe.embeddings ?? [],
         live: { ok: probe.models !== undefined, code: probe.code },
         // A model the list does not name can still be typed by hand.
         manualEntry: true,

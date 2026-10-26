@@ -2,6 +2,7 @@ import { AccountError, resolveConnection, type AccountRecord, type AccountStore,
 import { CredentialStoreError } from "./auth/broker.ts"
 import { ProviderError } from "./providers/errors.ts"
 import { parseImageModels, type ImageModel } from "./images/models.ts"
+import { parseEmbeddingModels, type EmbeddingModel } from "./memory/embeddings.ts"
 import { fetchModelListAnswer, parseModelList, type ListedModel } from "./providers/model-list.ts"
 import type { ProviderCredentialResolver } from "./providers/types.ts"
 
@@ -29,6 +30,8 @@ export interface ConnectionCheck {
   readonly models?: readonly ListedModel[]
   /** The image generators the same list names. */
   readonly images?: readonly ImageModel[]
+  /** The embedding models the same list names. */
+  readonly embeddings?: readonly EmbeddingModel[]
   readonly code: ConnectionCheckCode
   /** The provider's HTTP status, when it answered with one that was not a success. */
   readonly httpStatus?: number
@@ -67,7 +70,7 @@ export async function checkConnection(record: AccountRecord, credentialResolver:
     }
     const answer = await fetchModelListAnswer(options.maxRetries === undefined ? connection.options : { ...connection.options, maxRetries: options.maxRetries })
     const models = parseModelList(answer)
-    return { connection, models, images: parseImageModels(answer, connection), code: "OK" }
+    return { connection, models, images: parseImageModels(answer, connection), embeddings: parseEmbeddingModels(answer, connection), code: "OK" }
   } catch (error) {
     if (credentialFailure instanceof CredentialStoreError) throw credentialFailure
     if (credentialFailure !== undefined) return { connection, code: credentialCheckCode(credentialFailure) }

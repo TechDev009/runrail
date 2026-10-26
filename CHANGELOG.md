@@ -6,6 +6,12 @@ All notable changes to Runrail will be documented here.
 
 - Built on the public Nifra 5.8.0 packages (was 5.3.0), and `runrail new`
   starters scaffold with `create-nifra@5.8.0`.
+- Recall by meaning. Pick an embedding model on one of your connections and
+  memories are embedded in the background with that connection's own key;
+  recall then finds a memory that says the same thing in other words, joined
+  with the keyword matches. How close counts as the same thing is measured for
+  each model when you pick it. Off until you pick a model, and it falls back
+  to keywords when the model does not answer.
 
 ### Fixes
 

@@ -18,8 +18,10 @@ export interface Memory {
 }
 
 export interface RecallHit extends Memory {
-  /** Share of the query's words the memory has, 0 to 1. */
+  /** Share of the query's words the memory has, or its similarity in meaning to the query, 0 to 1. */
   readonly score: number
+  /** How local recall found it: by the query's words, by meaning, or both. */
+  readonly match?: "keyword" | "meaning" | "both"
 }
 
 export interface MemoryAdd {
