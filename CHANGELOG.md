@@ -14,6 +14,11 @@ All notable changes to Runrail will be documented here.
   code of each is scanned and only the closest thousand are compared in full,
   so at the 50,000-memory limit recall holds about 11 MB. Off until you pick a
   model, and it falls back to keywords when the model does not answer.
+- Connectors on Pi and the ACP routes. Copilot, OpenCode, Gemini, and Goose
+  start Runrail's connectors MCP server for each session, and Pi loads an
+  extension that declares the connector tools with `registerTool`, so it works
+  whatever MCP extension Pi has. Like Codex, these routes cannot ask before a
+  tool runs, so they get only the tools whose grant needs no approval.
 - Sign in to a remote MCP server in the browser. A server that answers 401
   now reports `MCP_SIGN_IN_REQUIRED` instead of a transport failure, and
   `auth.mcp.start` signs in the way the MCP authorization spec describes:

@@ -179,6 +179,19 @@ describe("a coding tool over the Agent Client Protocol", () => {
     await backend.close(session.id)
   })
 
+  test("Runrail's own MCP servers go with every conversation the agent opens or loads", async () => {
+    const connectors = { name: "runrail_connectors", command: "/opt/runrail", args: ["connectors-mcp", "--endpoint-file", "/tmp/endpoint.json"], env: [] }
+    const backend = copilot("echo", { mcpServers: [connectors] })
+    const session = await backend.createSession({ cwd: "/tmp", sessionId: "acp-mcp" })
+    expect(echo(await collect(backend, session.id, "first")).session).toEqual({ method: "session/new", params: { cwd: "/tmp", mcpServers: [connectors] } })
+    await backend.setModel(session.id, "gpt-other")
+    expect(echo(await collect(backend, session.id, "second")).session).toEqual({ method: "session/load", params: { sessionId: "fixture-acp-session", cwd: "/tmp", mcpServers: [connectors] } })
+    await backend.close(session.id)
+
+    expect(await failure(() => copilot("echo", { mcpServers: [{ ...connectors, command: "" }] }))).toBe("COMMAND_AGENT_INVALID")
+    expect(await failure(() => copilot("echo", { mcpServers: [{ ...connectors, args: ["a\0b"] }] }))).toBe("COMMAND_AGENT_INVALID")
+  })
+
   test("a model the agent lists for the conversation is switched in place", async () => {
     const backend = copilot("models", { launch: { model: "fixture-small" } })
     const session = await backend.createSession({ cwd: "/tmp", sessionId: "acp-models" })

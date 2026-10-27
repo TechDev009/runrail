@@ -23,6 +23,8 @@ export interface McpEndpoint {
   readonly file: string
   /** One `--mcp-config` document that starts this server. */
   readonly mcpConfig: string
+  /** The command that starts this server, for a client that takes servers one by one. */
+  readonly server: { readonly command: string; readonly args: readonly string[] }
   publish(url: string, token: string): Promise<void>
   remove(): Promise<void>
 }
@@ -41,7 +43,8 @@ export async function createMcpEndpoint(command: readonly string[], server: { re
   const directory = await mkdtemp(join(tmpdir(), `runrail-${server.label}-`))
   await chmod(directory, 0o700)
   const file = join(directory, "endpoint.json")
-  const mcpConfig = JSON.stringify({ mcpServers: { [server.name]: { type: "stdio", command: command[0], args: [...command.slice(1), server.subcommand, "--endpoint-file", file] } } })
+  const started = Object.freeze({ command: command[0]!, args: Object.freeze([...command.slice(1), server.subcommand, "--endpoint-file", file]) })
+  const mcpConfig = JSON.stringify({ mcpServers: { [server.name]: { type: "stdio", ...started } } })
   if (mcpConfig.length > MAX_MCP_CONFIG_CHARS) {
     await rm(directory, { recursive: true, force: true })
     throw new Error(`${server.label} MCP configuration is too long`)
@@ -49,6 +52,7 @@ export async function createMcpEndpoint(command: readonly string[], server: { re
   return {
     file,
     mcpConfig,
+    server: started,
     async publish(url, token) {
       endpointUrl(url, server.label)
       if (!TOKEN.test(token)) throw new Error(`${server.label} endpoint token is invalid`)

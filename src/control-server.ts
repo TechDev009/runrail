@@ -379,7 +379,7 @@ async function serveControl(
     ...(threadTools === undefined ? {} : { threads: { bridge: threadsBridge as ThreadsBridge, ...(threadsEndpoint === undefined ? {} : { mcpConfig: threadsEndpoint.mcpConfig }) } }),
     ...(computerTools === undefined ? {} : { computer: { bridge: computerBridge as ComputerBridge, ...(computerEndpoint === undefined ? {} : { mcpConfig: computerEndpoint.mcpConfig }) } }),
     ...(imageService === undefined ? {} : { images: { service: imageService, ...(imagesEndpoint === undefined ? {} : { mcpConfig: imagesEndpoint.mcpConfig }) } }),
-    ...(builtConnectors === undefined ? {} : { connectors: { registry: builtConnectors, ...(connectorsEndpoint === undefined ? {} : { mcpConfig: connectorsEndpoint.mcpConfig }) } }),
+    ...(builtConnectors === undefined ? {} : { connectors: { registry: builtConnectors, ...(connectorsEndpoint === undefined ? {} : { mcpConfig: connectorsEndpoint.mcpConfig, mcpServer: connectorsEndpoint.server, endpointFile: connectorsEndpoint.file }) } }),
     ...(mcpOAuth === undefined ? {} : { mcpSignIns: mcpOAuth }),
   }, options.toolConnection))
   made.push(() => controller.close("control server failed"))

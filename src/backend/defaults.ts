@@ -24,7 +24,7 @@ import { createCopilotHarness } from "../harness/copilot.ts"
 import { createOpenCodeHarness } from "../harness/opencode.ts"
 import { createGeminiHarness } from "../harness/gemini.ts"
 import { createGooseHarness } from "../harness/goose.ts"
-import type { AcpAgentBackend } from "./acp-agent.ts"
+import type { AcpAgentBackend, AcpMcpServer } from "./acp-agent.ts"
 import { parseHarnessLaunchOptions } from "../harness/launch.ts"
 import { createFileVendorSessionStore, type VendorSessionStore } from "../harness/vendor-session-store.ts"
 import { createHash } from "node:crypto"
@@ -274,7 +274,7 @@ export function isAcpRouteBackend(name: string): boolean {
   return ACP_ROUTE_BACKENDS.includes(name)
 }
 
-type AcpRouteOptions = Pick<Parameters<typeof createCopilotHarness>[0] & object, "command" | "args" | "auth" | "launch" | "vendorSessions" | "onLive">
+type AcpRouteOptions = Pick<Parameters<typeof createCopilotHarness>[0] & object, "command" | "args" | "auth" | "launch" | "mcpServers" | "vendorSessions" | "onLive">
 
 /**
  * A coding tool in its Agent Client Protocol mode (Copilot, OpenCode, Gemini, Goose). A named command stands in
@@ -293,6 +293,7 @@ function createAcpRouteBackend(context: RunrailBackendContext, backend: string, 
     ...(args === undefined ? {} : { args }),
     auth: parseHarnessAuthOptions(context.options.harnessAuth),
     launch: parseHarnessLaunchOptions(context.options.harnessLaunch),
+    ...(Array.isArray(context.options.harnessMcpServers) ? { mcpServers: context.options.harnessMcpServers as readonly AcpMcpServer[] } : {}),
     ...vendorSessions(context, backend, account),
     ...liveSink(context),
   })

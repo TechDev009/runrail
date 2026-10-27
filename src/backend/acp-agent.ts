@@ -39,6 +39,14 @@ export interface AcpAuthentication {
   readonly meta?: Readonly<Record<string, unknown>>
 }
 
+/** An MCP server the agent starts for each session, as ACP's `session/new` takes it. */
+export interface AcpMcpServer {
+  readonly name: string
+  readonly command: string
+  readonly args: readonly string[]
+  readonly env: readonly { readonly name: string; readonly value: string }[]
+}
+
 export interface AcpAgentBackendOptions {
   /** The backend's name in session snapshots, e.g. `copilot`. */
   readonly name: string
@@ -81,6 +89,8 @@ export interface AcpAgentBackendOptions {
   readonly maxEvents?: number
   /** Model, effort, permission mode, added instructions, and the conversation to continue. */
   readonly launch?: HarnessLaunchOptions
+  /** Runrail's own servers, such as the connectors; the agent starts them for every session it opens, forks or loads. */
+  readonly mcpServers?: readonly AcpMcpServer[]
   /** Keeps the agent's session id so a later backend instance loads the same conversation. */
   readonly vendorSessions?: VendorSessionStore
   /** Optional transient sink for reasoning text and plan updates; never persisted. */
@@ -161,6 +171,7 @@ export class AcpAgentBackend implements AgentBackend {
   private readonly options: Required<Pick<AcpAgentBackendOptions, "timeoutMs" | "turnTimeoutMs" | "maxOutputBytes" | "maxEvents">>
   private readonly launch: HarnessLaunchOptions
   private readonly commandOptions: AcpAgentBackendOptions
+  private readonly mcpServers: readonly AcpMcpServer[]
   private readonly auth: HarnessAuthOptions
   private readonly label: string
   private readonly sessions = new Map<string, AgentSessionSnapshot>()
@@ -224,6 +235,7 @@ export class AcpAgentBackend implements AgentBackend {
     this.model = this.launch.model
     this.effort = this.launch.effort
     this.commandOptions = options
+    this.mcpServers = Object.freeze((options.mcpServers ?? []).map((server) => Object.freeze({ name: server.name, command: server.command, args: [...server.args], env: server.env.map((variable) => ({ name: variable.name, value: variable.value })) })))
     this.options = {
       timeoutMs: options.timeoutMs ?? 120_000,
       turnTimeoutMs: options.turnTimeoutMs ?? options.timeoutMs ?? HARNESS_ROUTE_LIMITS.timeoutMs,
@@ -314,7 +326,7 @@ export class AcpAgentBackend implements AgentBackend {
     }
     if (!this.canFork) throw commandError("COMMAND_AGENT_UNSUPPORTED", `${this.label} cannot fork a conversation`)
     const parent = this.requireVendorSessionId()
-    const result = await this.request<unknown>("session/fork", { sessionId: parent, cwd: session.cwd, mcpServers: [] })
+    const result = await this.request<unknown>("session/fork", { sessionId: parent, cwd: session.cwd, mcpServers: this.mcpServers })
     const forked = isRecord(result) ? result.sessionId : undefined
     if (!isVendorSessionId(forked) || forked === parent) throw commandError("COMMAND_AGENT_OUTPUT_INVALID", `${this.label} fork identity is invalid`)
     await store.save(targetSessionId, forked)
@@ -509,7 +521,7 @@ export class AcpAgentBackend implements AgentBackend {
   }
 
   private async newSession(session: AgentSessionSnapshot): Promise<void> {
-    const result = await this.request<unknown>("session/new", { cwd: session.cwd, mcpServers: [] })
+    const result = await this.request<unknown>("session/new", { cwd: session.cwd, mcpServers: this.mcpServers })
     const vendorSessionId = isRecord(result) ? result.sessionId : undefined
     if (!isVendorSessionId(vendorSessionId)) throw commandError("COMMAND_AGENT_OUTPUT_INVALID", `${this.label} session identity is invalid`)
     this.vendorSessionId = vendorSessionId
@@ -533,7 +545,7 @@ export class AcpAgentBackend implements AgentBackend {
    */
   private async continueCopy(session: AgentSessionSnapshot, original: string): Promise<void> {
     if (!this.canFork) throw commandError("COMMAND_AGENT_UNSUPPORTED", `${this.label} cannot continue a copy of that conversation`)
-    const result = await this.request<unknown>("session/fork", { sessionId: original, cwd: session.cwd, mcpServers: [] })
+    const result = await this.request<unknown>("session/fork", { sessionId: original, cwd: session.cwd, mcpServers: this.mcpServers })
     const forked = isRecord(result) ? result.sessionId : undefined
     if (!isVendorSessionId(forked) || forked === original) throw commandError("COMMAND_AGENT_OUTPUT_INVALID", `${this.label} fork identity is invalid`)
     this.vendorSessionId = forked
@@ -549,7 +561,7 @@ export class AcpAgentBackend implements AgentBackend {
     if (!this.canLoadSession) return false
     this.loading = true
     try {
-      const result = await this.request<unknown>("session/load", { sessionId: vendorSessionId, cwd, mcpServers: [] })
+      const result = await this.request<unknown>("session/load", { sessionId: vendorSessionId, cwd, mcpServers: this.mcpServers })
       this.vendorSessionId = vendorSessionId
       this.sessionBound = true
       this.readSessionInfo(result)
@@ -1206,6 +1218,14 @@ function validateOptions(options: AcpAgentBackendOptions): void {
   if (options.maxEvents !== undefined && (!Number.isSafeInteger(options.maxEvents) || options.maxEvents < 1 || options.maxEvents > 1_000_000)) throw commandError("COMMAND_AGENT_INVALID", "event bound is invalid")
   if (options.vendorSessions !== undefined && (options.vendorSessions === null || typeof options.vendorSessions !== "object" || typeof options.vendorSessions.load !== "function" || typeof options.vendorSessions.save !== "function")) throw commandError("COMMAND_AGENT_INVALID", "vendor session store is invalid")
   if (options.onLive !== undefined && typeof options.onLive !== "function") throw commandError("COMMAND_AGENT_INVALID", "live sink is invalid")
+  if (options.mcpServers !== undefined && (!Array.isArray(options.mcpServers) || options.mcpServers.length > 16 || !options.mcpServers.every(isMcpServer))) throw commandError("COMMAND_AGENT_INVALID", "MCP servers are invalid")
+}
+
+function isMcpServer(server: AcpMcpServer): boolean {
+  const text = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && value.length <= max && !value.includes("\0")
+  return server !== null && typeof server === "object" && text(server.name, 128) && text(server.command, 1_024)
+    && Array.isArray(server.args) && server.args.length <= 128 && server.args.every((arg) => text(arg, 4_096))
+    && Array.isArray(server.env) && server.env.length <= 64 && server.env.every((variable) => variable !== null && typeof variable === "object" && text(variable.name, 256) && typeof variable.value === "string" && !variable.value.includes("\0"))
 }
 
 function normalizeError(error: unknown, fallback: string): CommandAgentBackendError {

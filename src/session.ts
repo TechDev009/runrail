@@ -95,7 +95,8 @@ import { NativeBackgroundCommands } from "./background/native-commands.ts"
 import { createToolCatalog } from "./tools/catalog.ts"
 import type { RunrailBrowserAccess } from "./browser/bridge.ts"
 import { BROWSER_MCP_ALLOWED_TOOLS, BROWSER_MCP_HINT } from "./browser/mcp.ts"
-import { CONNECTORS_MCP_HINT, CONNECTORS_MCP_SERVER, connectorsPermissions } from "./connectors/mcp.ts"
+import { CONNECTORS_ACP_HINT, CONNECTORS_MCP_HINT, CONNECTORS_MCP_SERVER, connectorsPermissions } from "./connectors/mcp.ts"
+import { writePiConnectorsExtension, type PiConnectorsExtension } from "./connectors/pi.ts"
 import { connectorNativeTools, grantedConnectorTools, grantOf, mcpGrantKey, type GrantedConnectorTool } from "./connectors/tools.ts"
 import { ConnectorApprovals } from "./connectors/approvals.ts"
 import { createBrowserTools } from "./browser/tools.ts"
@@ -292,6 +293,10 @@ export interface RunrailConnectorAccess {
   readonly registry: ConnectorRegistry
   /** One `--mcp-config` document that starts `runrail connectors-mcp` for Claude Code. */
   readonly mcpConfig?: string
+  /** The same server for an ACP agent, which takes each server's command and arguments. */
+  readonly mcpServer?: { readonly command: string; readonly args: readonly string[] }
+  /** Where the engine publishes its `/connectors` address and token; Pi's connector tools read it for each call. */
+  readonly endpointFile?: string
 }
 
 export interface SessionTreeSnapshot {
@@ -316,6 +321,8 @@ export interface RunrailRuntime {
   readonly connectors?: { readonly registry: ConnectorRegistry; readonly tools: readonly GrantedConnectorTool[]; readonly approvals?: ConnectorApprovals }
   /** Commands Runrail's own agent left running; stopped with the session. */
   readonly backgroundCommands?: NativeBackgroundCommands
+  /** The extension that gives Pi the connector tools; removed with the session. */
+  readonly piConnectors?: PiConnectorsExtension
   /** The behavior file's MCP servers, whether or not this backend starts them. */
   readonly mcpServers?: readonly BehaviorMcpServer[]
   readonly mcpSignIns?: McpSignIns
@@ -484,6 +491,7 @@ export class RunrailSession {
   /** The connector calls the person approved in Claude Code's prompt, each spent by one run. */
   readonly connectorApprovals?: ConnectorApprovals
   private readonly backgroundCommands?: NativeBackgroundCommands
+  private readonly piConnectors?: PiConnectorsExtension
   private readonly mcpServers: readonly BehaviorMcpServer[]
   private readonly mcpSignIns: McpSignIns | undefined
   readonly usage?: BudgetLedger
@@ -536,6 +544,7 @@ export class RunrailSession {
       readonly nifra?: NifraUse
       readonly connectors?: { readonly registry: ConnectorRegistry; readonly tools: readonly GrantedConnectorTool[]; readonly approvals?: ConnectorApprovals }
       readonly backgroundCommands?: NativeBackgroundCommands
+      readonly piConnectors?: PiConnectorsExtension
       readonly mcpServers?: readonly BehaviorMcpServer[]
       readonly mcpSignIns?: McpSignIns
       readonly modelCatalog?: ModelCatalog
@@ -569,6 +578,7 @@ export class RunrailSession {
     this.connectorRegistry = controls.connectors?.registry
     this.connectorApprovals = controls.connectors?.approvals
     this.backgroundCommands = controls.backgroundCommands
+    this.piConnectors = controls.piConnectors
     this.mcpServers = controls.mcpServers ?? []
     this.mcpSignIns = controls.mcpSignIns
     this.modelCatalog = controls.modelCatalog
@@ -1048,6 +1058,7 @@ export class RunrailSession {
     await this.host.stop(reason)
     await this.mcp?.close()
     await this.backgroundCommands?.close()
+    await this.piConnectors?.remove()
   }
 
   close(reason = "closed"): Promise<void> {
@@ -1095,6 +1106,7 @@ export async function createRunrailSession(options: RunrailSessionOptions): Prom
     ...(runtime.mcp === undefined ? {} : { mcp: runtime.mcp }),
     ...(runtime.connectors === undefined ? {} : { connectors: runtime.connectors }),
     ...(runtime.backgroundCommands === undefined ? {} : { backgroundCommands: runtime.backgroundCommands }),
+    ...(runtime.piConnectors === undefined ? {} : { piConnectors: runtime.piConnectors }),
     ...(runtime.mcpServers === undefined ? {} : { mcpServers: runtime.mcpServers }),
     ...(runtime.mcpSignIns === undefined ? {} : { mcpSignIns: runtime.mcpSignIns }),
     nifra: runtime.nifra,
@@ -1129,6 +1141,7 @@ export async function createRunrailRuntime(options: RunrailSessionOptions): Prom
 async function closeRuntimeResources(runtime: RunrailRuntime): Promise<void> {
   await runtime.mcp?.close().catch(() => undefined)
   await runtime.backgroundCommands?.close().catch(() => undefined)
+  await runtime.piConnectors?.remove().catch(() => undefined)
 }
 
 async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() => Promise<unknown>)[]): Promise<RunrailRuntime> {
@@ -1255,6 +1268,12 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
   const configuredMcp = options.backend === "native" && grantedServers !== undefined ? grantConfiguredMcp(await connectConfiguredMcp(grantedServers, policy.root, undefined, undefined, process.env, options.mcpSignIns), grants) : NO_CONFIGURED_MCP
   owned.push(() => configuredMcp.close())
   const grantedConnectors = options.connectors === undefined ? [] : grantedConnectorTools(options.connectors.registry, grants)
+  // Codex, Pi, and the ACP agents cannot ask before a connector runs, so they get only what runs without asking.
+  const unaskedConnectors = grantedConnectors.filter((tool) => !tool.approval)
+  const acpRoute = isAcpRouteBackend(options.backend)
+  const acpConnectors = acpRoute && options.connectors?.mcpServer !== undefined && unaskedConnectors.length > 0 ? options.connectors.mcpServer : undefined
+  const piConnectors = options.backend === "pi" && options.connectors?.endpointFile !== undefined && unaskedConnectors.length > 0 ? await writePiConnectorsExtension(options.connectors.endpointFile, unaskedConnectors) : undefined
+  if (piConnectors !== undefined) owned.push(() => piConnectors.remove())
   const backgroundCommands = options.backend === "native" ? new NativeBackgroundCommands({ root: policy.root, ...(options.onLive === undefined ? {} : { onLive: options.onLive }) }) : undefined
   if (backgroundCommands !== undefined) owned.push(() => backgroundCommands.close())
   const mergedTools = mergeNativeTools([
@@ -1295,11 +1314,10 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
         maxMessageChars: NATIVE_MESSAGE_CHARS,
       })
     },
-    pi: () => createPiBackend(createPiOptions(options)),
+    pi: () => createPiBackend(createPiOptions(options, piConnectors === undefined ? [] : ["--extension", piConnectors.file])),
     replay: () => createReplayBackend(),
   })
   const adapter = options.adapter ?? registry.select({ preferred: options.backend, requiredCapabilities })
-  const acpRoute = isAcpRouteBackend(options.backend)
   const vendorRoute = options.backend === "codex" || options.backend === "claude-code" || acpRoute
   if (options.harnessLaunch !== undefined && !vendorRoute) throw new Error("HARNESS_LAUNCH_REQUIRES_HARNESS_BACKEND")
   // A caller who shapes the command line by hand owns every argument on it.
@@ -1313,7 +1331,9 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
   const threadsLaunch = browserLaunch !== undefined && options.backend === "claude-code" && options.threads?.mcpConfig !== undefined ? withToolsMcp(browserLaunch, options.threads.mcpConfig, THREADS_MCP_HINT, THREADS_MCP_ALLOWED_TOOLS) : browserLaunch
   const computerLaunch = threadsLaunch !== undefined && options.backend === "claude-code" && options.computer?.mcpConfig !== undefined ? withToolsMcp(threadsLaunch, options.computer.mcpConfig, COMPUTER_MCP_HINT, COMPUTER_MCP_ALLOWED_TOOLS) : threadsLaunch
   const imagesLaunch = computerLaunch !== undefined && options.backend === "claude-code" && options.images?.mcpConfig !== undefined ? withToolsMcp(computerLaunch, options.images.mcpConfig, IMAGES_MCP_HINT, IMAGES_MCP_ALLOWED_TOOLS) : computerLaunch
-  const harnessLaunch = imagesLaunch !== undefined && options.backend === "claude-code" && options.connectors?.mcpConfig !== undefined && grantedConnectors.length > 0 ? withConnectorsMcp(imagesLaunch, options.connectors.mcpConfig, grantedConnectors) : imagesLaunch
+  const harnessLaunch = imagesLaunch !== undefined && options.backend === "claude-code" && options.connectors?.mcpConfig !== undefined && grantedConnectors.length > 0
+    ? withConnectorsMcp(imagesLaunch, options.connectors.mcpConfig, grantedConnectors)
+    : imagesLaunch !== undefined && acpConnectors !== undefined ? withInstructions(imagesLaunch, CONNECTORS_ACP_HINT) : imagesLaunch
   const connectorApprovals = options.backend === "claude-code" && grantedConnectors.some((tool) => tool.approval) ? new ConnectorApprovals() : undefined
   // The tool's own command in its default config folder, where an import found the conversation.
   const shapedArgs = Array.isArray(options.harnessArgs) && options.harnessArgs.length > 0
@@ -1345,7 +1365,8 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
           ...(options.backend === "codex" && options.computer !== undefined ? { computer: options.computer.bridge } : {}),
           ...(options.backend === "codex" && options.images !== undefined ? { images: options.images.service } : {}),
           // Codex cannot ask before a dynamic tool runs, so it gets only what runs without asking.
-          ...(options.backend === "codex" && options.connectors !== undefined && grantedConnectors.some((tool) => !tool.approval) ? { connectors: { registry: options.connectors.registry, tools: grantedConnectors.filter((tool) => !tool.approval) } } : {}),
+          ...(options.backend === "codex" && options.connectors !== undefined && unaskedConnectors.length > 0 ? { connectors: { registry: options.connectors.registry, tools: unaskedConnectors } } : {}),
+          ...(acpConnectors === undefined ? {} : { harnessMcpServers: [{ name: CONNECTORS_MCP_SERVER, command: acpConnectors.command, args: acpConnectors.args, env: [] }] }),
           // Beside the session's own files: the vendor conversation this session continues.
           ...(vendorRoute && options.sessionDir !== undefined ? { harnessStateDir: join(options.sessionDir, "harness") } : {}),
           ...(harnessLive === undefined ? {} : { onLive: harnessLive }),
@@ -1373,8 +1394,10 @@ async function buildRunrailRuntime(options: RunrailSessionOptions, owned: (() =>
     context,
     ...(mcpPrompts.length === 0 ? {} : { mcpPrompts }),
     ...(configuredMcp.status.length === 0 ? {} : { mcp: configuredMcp }),
-    ...(options.connectors === undefined ? {} : { connectors: { registry: options.connectors.registry, tools: grantedConnectors, ...(connectorApprovals === undefined ? {} : { approvals: connectorApprovals }) } }),
+    // What `/connectors` lists and runs for this thread's route.
+    ...(options.connectors === undefined ? {} : { connectors: { registry: options.connectors.registry, tools: options.backend === "pi" || acpRoute ? unaskedConnectors : grantedConnectors, ...(connectorApprovals === undefined ? {} : { approvals: connectorApprovals }) } }),
     ...(backgroundCommands === undefined ? {} : { backgroundCommands }),
+    ...(piConnectors === undefined ? {} : { piConnectors }),
     ...(behavior === undefined || behavior.mcpServers.length === 0 ? {} : { mcpServers: behavior.mcpServers }),
     ...(options.mcpSignIns === undefined ? {} : { mcpSignIns: options.mcpSignIns }),
     ...(nativeModel?.catalog === undefined ? {} : { modelCatalog: nativeModel.catalog }),
@@ -1463,6 +1486,11 @@ function withConnectorsMcp(launch: HarnessLaunchOptions, mcpConfig: string, gran
     allowedTools: Object.freeze([...new Set([...(launch.allowedTools ?? []), ...permissions.allowedTools])]),
     ...(permissions.askTools.length === 0 ? {} : { askTools: Object.freeze([...new Set([...(launch.askTools ?? []), ...permissions.askTools])]) }),
   })
+}
+
+function withInstructions(launch: HarnessLaunchOptions, hint: string): HarnessLaunchOptions {
+  const room = MAX_APPEND_SYSTEM_PROMPT - hint.length - 2
+  return Object.freeze({ ...launch, appendSystemPrompt: launch.appendSystemPrompt === undefined ? hint : `${launch.appendSystemPrompt.slice(0, room)}\n\n${hint}` })
 }
 
 /** Claude Code's browser or thread tools: one more MCP server, whose tools run without asking each time. */
@@ -1755,10 +1783,10 @@ function piUsesNifra(options: Pick<PiBackendOptions, "appendSystemPrompt" | "ena
   return options.enableNifraTools === true || options.appendSystemPrompt === NIFRA_AGENT_INSTRUCTIONS
 }
 
-function createPiOptions(options: RunrailSessionOptions): Pick<PiBackendOptions, "command" | "args" | "rpcArgs" | "env" | "sessionDir" | "noSession" | "reloadCommand" | "enableReloadBridge" | "appendSystemPrompt" | "enableNifraTools" | "maxEventQueueSize"> {
+function createPiOptions(options: RunrailSessionOptions, extraArgs: readonly string[] = []): Pick<PiBackendOptions, "command" | "args" | "rpcArgs" | "env" | "sessionDir" | "noSession" | "reloadCommand" | "enableReloadBridge" | "appendSystemPrompt" | "enableNifraTools" | "maxEventQueueSize"> {
   const command = options.pi?.command ?? process.env.RUNRAIL_PI_COMMAND
   const sessionDir = options.pi?.sessionDir ?? options.sessionDir
-  const args = piSelectionArguments(options)
+  const args = [...piSelectionArguments(options), ...extraArgs]
   const nifra = nifraApplies(options.nifra, options.cwd)
   return {
     ...(options.pi ?? {}),

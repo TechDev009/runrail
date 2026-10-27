@@ -1047,9 +1047,14 @@ private endpoint file like the browser tools, whose list and calls come from
 `POST /connectors` with its own token (tools named `<id>_<action>`; the server
 is in `--allowedTools`, and each tool whose grant needs approval is in the
 launch's `askTools`, which the PreToolUse gate asks about in every permission
-mode, Full access included); Codex gets the tools that need no approval as dynamic
-tools when a thread starts, since it cannot ask before one runs. ACP tools and
-Pi get none yet.
+mode, Full access included). The routes that cannot ask before a tool runs get
+only the tools that need no approval: Codex as dynamic tools when a thread
+starts; Copilot, OpenCode, Gemini, and Goose as the same MCP server, passed in
+ACP's `mcpServers` for every session they open, fork, or load; and Pi through
+an extension Runrail writes for the run (private, removed with the session) and
+loads with `--extension`, which declares each tool with Pi's `registerTool` and
+calls `POST /connectors`. On these routes `/connectors` lists and runs only
+those tools, so an agent that reaches the endpoint itself gets no more.
 
 ## MCP servers from the behavior file
 
