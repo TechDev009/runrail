@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { embedTexts, meaningFloor, NOISE_TEXTS, parseEmbeddingModels, type Embed } from "../../src/memory/embeddings.ts"
+import { codeDistance, embedTexts, meaningFloor, NOISE_TEXTS, parseEmbeddingModels, signCode, similarity, type Embed } from "../../src/memory/embeddings.ts"
 import { LocalMemory } from "../../src/memory/local.ts"
 import { MemoryService } from "../../src/memory/service.ts"
 import { MemoryError } from "../../src/memory/types.ts"
@@ -155,6 +156,95 @@ describe("vectors in local memory", () => {
     const late = await second.add({ scope: "project:a", text: "Tests run with bun test." })
     second.storeVectors("m", [{ id: late.id, text: late.text, vector: vectorFor(late.text) }])
     expect(first.similar("m", specs, ["project:a"], 1).map((hit) => hit.memory.id)).toEqual([late.id])
+  })
+})
+
+// Unit vectors around `clusters` random directions, from a fixed seed: shaped like real embeddings, which bunch by topic.
+function clustered(count: number, clusters: number, dims: number, seed = 1): Float32Array[] {
+  let state = seed
+  const random = () => {
+    state = (state * 1_103_515_245 + 12_345) & 0x7fffffff
+    return state / 0x7fffffff - 0.5
+  }
+  const unit = (vector: Float32Array) => {
+    const norm = Math.hypot(...vector) || 1
+    return vector.map((value) => value / norm)
+  }
+  const centers = Array.from({ length: clusters }, () => unit(Float32Array.from({ length: dims }, random)))
+  return Array.from({ length: count }, (_, index) => unit(centers[index % clusters]!.map((value) => value + random() * 0.12)))
+}
+
+async function remember(memory: LocalMemory, scope: string, vectors: readonly Float32Array[], model = "m"): Promise<string[]> {
+  const ids: string[] = []
+  for (let start = 0; start < vectors.length; start += 64) {
+    const batch = await Promise.all(vectors.slice(start, start + 64).map(async (vector, index) => ({ ...(await memory.add({ scope, text: `memory ${String(start + index)}` })), vector })))
+    memory.storeVectors(model, batch.map((entry) => ({ id: entry.id, text: entry.text, vector: entry.vector })))
+    ids.push(...batch.map((entry) => entry.id))
+  }
+  return ids
+}
+
+function exactNearest(query: Float32Array, vectors: readonly Float32Array[], ids: readonly string[], count: number): string[] {
+  return vectors.map((vector, index) => ({ id: ids[index]!, near: similarity(query, vector) })).sort((a, b) => b.near - a.near).slice(0, count).map((hit) => hit.id)
+}
+
+describe("sign codes", () => {
+  test("a code has one bit per dimension, set where the vector is positive, and counts the bits two codes differ in", () => {
+    const code = signCode(Float32Array.from({ length: 40 }, (_, index) => (index % 3 === 0 ? 0.1 : -0.1)))
+    expect(code.length).toBe(2)
+    expect([...Array.from({ length: 40 }, (_, index) => (code[index >>> 5]! >>> (index & 31)) & 1)]).toEqual(Array.from({ length: 40 }, (_, index) => (index % 3 === 0 ? 1 : 0)))
+    expect(codeDistance(Uint32Array.of(0b1011, 0), Uint32Array.of(0b0001, 0xffffffff))).toBe(34)
+    expect(codeDistance(Uint32Array.of(7), Uint32Array.of(0, 0, 7), 2)).toBe(0)
+  })
+
+  test("the closest by code are compared in full, finding what comparing every vector finds", async () => {
+    const memory = new LocalMemory(":memory:", { closestByCode: 100 })
+    cleanup.push(() => memory.close())
+    // The last 60 are held out as queries: near some memories, as a real question is.
+    const all = clustered(1_560, 40, 256)
+    const vectors = all.slice(0, 1_500)
+    const ids = await remember(memory, "project:a", vectors)
+    let found = 0
+    for (const query of all.slice(1_500)) {
+      const hits = memory.similar("m", query, ["project:a"], 10)
+      expect(hits.map((hit) => hit.similarity)).toEqual([...hits.map((hit) => hit.similarity)].sort((a, b) => b - a))
+      const exact = exactNearest(query, vectors, ids, 10)
+      found += hits.filter((hit) => exact.includes(hit.memory.id)).length
+    }
+    expect(found / 600).toBeGreaterThan(0.95)
+  })
+
+  test("only the scopes asked are scanned, so a busy scope never crowds out a quiet one", async () => {
+    const memory = new LocalMemory(":memory:", { closestByCode: 8 })
+    cleanup.push(() => memory.close())
+    const busy = clustered(600, 12, 256)
+    await remember(memory, "project:busy", busy)
+    const quiet = clustered(31, 3, 256, 7)
+    const mine = quiet.slice(0, 30)
+    const ids = await remember(memory, "project:quiet", mine)
+    const hits = memory.similar("m", quiet[30]!, ["project:quiet"], 3)
+    expect(hits.map((hit) => hit.memory.id)).toEqual(exactNearest(quiet[30]!, mine, ids, 3))
+    expect(memory.similar("m", mine[4]!, ["project:quiet"], 1)[0]?.memory.id).toBe(ids[4])
+  })
+
+  test("vectors from a file written before codes get their scope and code once, and are found", async () => {
+    const path = join(await scratch(), "memory.db")
+    const old = new Database(path, { create: true })
+    old.run("CREATE TABLE memories (id TEXT PRIMARY KEY, scope TEXT NOT NULL, text TEXT NOT NULL, source_kind TEXT NOT NULL, source_id TEXT, source_ref TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+    old.run("CREATE TABLE memory_vectors (memory_id TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (memory_id, model))")
+    const vectors = clustered(50, 5, 24)
+    vectors.forEach((vector, index) => {
+      old.query("INSERT INTO memories VALUES (?, 'person', ?, 'manual', NULL, NULL, 1, 1)").run(`mem-${String(index)}`, `memory ${String(index)}`)
+      old.query("INSERT INTO memory_vectors VALUES (?, 'm', ?)").run(`mem-${String(index)}`, new Uint8Array(vector.buffer))
+    })
+    old.close()
+
+    const memory = new LocalMemory(path, { closestByCode: 10 })
+    cleanup.push(() => memory.close())
+    expect(memory.similar("m", vectors[17]!, ["person"], 1)[0]?.memory.id).toBe("mem-17")
+    const raw = new Database(path, { readonly: true })
+    expect(raw.query<{ readonly n: number }, []>("SELECT count(*) AS n FROM memory_vectors WHERE scope = 'person' AND length(code) = 4").get()?.n).toBe(50)
+    raw.close()
   })
 })
 

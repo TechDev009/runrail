@@ -186,6 +186,25 @@ export function similarity(left: Float32Array, right: Float32Array): number {
   return sum
 }
 
+/** One bit per dimension, set where the vector is positive: a 768-dimension vector in 96 bytes. */
+export function signCode(vector: Float32Array): Uint32Array {
+  const code = new Uint32Array(Math.ceil(vector.length / 32))
+  for (let index = 0; index < vector.length; index += 1) if (vector[index]! > 0) code[index >>> 5]! |= 1 << (index & 31)
+  return code
+}
+
+/** How many bits two codes differ in; vectors that point the same way differ in few. */
+export function codeDistance(left: Uint32Array, right: Uint32Array, at = 0): number {
+  let distance = 0
+  for (let word = 0; word < left.length; word += 1) {
+    let bits = left[word]! ^ right[at + word]!
+    bits -= (bits >>> 1) & 0x55555555
+    bits = (bits & 0x33333333) + ((bits >>> 2) & 0x33333333)
+    distance += (((bits + (bits >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24
+  }
+  return distance
+}
+
 export function vectorBlob(vector: Float32Array): Uint8Array {
   return new Uint8Array(vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength))
 }

@@ -58,7 +58,6 @@ export interface RecallResult {
 
 /** Recall keeps hits with at least this score (`recallScore`, D14). */
 export const RECALL_FLOOR = 0.34
-/** Recall by meaning keeps hits at least this similar to the query (cosine of unit vectors). Not yet calibrated per model. */
 /** The floor for a model picked before floors were measured per model. */
 export const MEANING_FLOOR = 0.5
 // Reciprocal rank fusion's constant: a hit's weight from one ranking is 1 / (k + rank).

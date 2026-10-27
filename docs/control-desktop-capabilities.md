@@ -567,8 +567,10 @@ project), in one SQLite file shared by every engine, `~/.runrail/memory/`
   settings as `floor` and returned with them. Local memories are then embedded in the
   background, 64 at a time, through the connection's OpenAI-style
   `embeddings` endpoint with its own key; the vectors stay in the memory
-  file, never the key. Recall embeds the query (waiting at most 2.5 s) and
-  joins the closest memories (cosine similarity at or above the model's floor,
+  file, never the key, each with a sign code (one bit per dimension, 96
+  bytes for 768). Recall embeds the query (waiting at most 2.5 s), scans the
+  codes of every memory in the scopes asked, compares in full the vectors of
+  the 1,024 whose codes differ least, and joins the closest memories (cosine similarity at or above the model's floor,
   0.5 for settings saved without one) with the keyword hits by reciprocal
   rank fusion; `match` says which found it: `keyword`,
   `meaning`, or `both`. A model that fails, or a connection turned off, leaves

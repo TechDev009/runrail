@@ -10,8 +10,10 @@ All notable changes to Runrail will be documented here.
   memories are embedded in the background with that connection's own key;
   recall then finds a memory that says the same thing in other words, joined
   with the keyword matches. How close counts as the same thing is measured for
-  each model when you pick it. Off until you pick a model, and it falls back
-  to keywords when the model does not answer.
+  each model when you pick it. Every memory is searched: a one-bit-per-dimension
+  code of each is scanned and only the closest thousand are compared in full,
+  so at the 50,000-memory limit recall holds about 11 MB. Off until you pick a
+  model, and it falls back to keywords when the model does not answer.
 - Sign in to a remote MCP server in the browser. A server that answers 401
   now reports `MCP_SIGN_IN_REQUIRED` instead of a transport failure, and
   `auth.mcp.start` signs in the way the MCP authorization spec describes:

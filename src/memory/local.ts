@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite"
 import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
-import { blobVector, similarity, vectorBlob } from "./embeddings.ts"
+import { blobVector, codeDistance, signCode, similarity, vectorBlob } from "./embeddings.ts"
 import { MemoryError, memoryText, queryTerms, recallScore, type Memory, type MemoryAdd, type MemoryListInput, type MemoryProvider, type MemoryScope, type RecallHit } from "./types.ts"
 
 /**
@@ -12,8 +12,10 @@ import { MemoryError, memoryText, queryTerms, recallScore, type Memory, type Mem
 
 const MAX_MEMORIES = 50_000
 const CANDIDATES = 25
-// Recall by meaning compares against at most this many of the newest memories in the scopes asked.
-const MAX_COMPARED = 20_000
+// Recall by meaning scans the sign code of every memory in the scopes asked, then compares in full
+// only the vectors of the closest this many. On real nomic-embed-text vectors the true 10 nearest
+// sat within the closest 560 codes for 99% of queries, at 475 and at 3,800 memories alike.
+const CLOSEST_BY_CODE = 1_024
 
 interface Row {
   readonly id: string
@@ -24,6 +26,10 @@ interface Row {
   readonly source_ref: string | null
   readonly created_at: number
   readonly updated_at: number
+}
+
+function codeBlob(code: Uint32Array): Uint8Array {
+  return new Uint8Array(code.buffer, code.byteOffset, code.byteLength)
 }
 
 function toMemory(row: Row): Memory {
@@ -48,16 +54,18 @@ export class LocalMemory implements MemoryProvider {
   readonly #now: () => number
   readonly #max: number
   readonly #onChange: (() => void) | undefined
-  // Vectors read for recall by meaning, kept until this process or another one writes the file.
-  #vectors: { readonly key: string; readonly version: number; readonly generation: number; readonly rows: readonly { readonly id: string; readonly vector: Float32Array }[] } | undefined
+  readonly #closestByCode: number
+  // Codes read for recall by meaning, kept until this process or another one writes the file.
+  #codes: { readonly key: string; readonly version: number; readonly generation: number; readonly ids: readonly string[]; readonly codes: Uint32Array; readonly words: number } | undefined
   #generation = 0
 
-  constructor(path: string, options: { readonly now?: () => number; readonly maxMemories?: number; readonly onChange?: () => void } = {}) {
+  constructor(path: string, options: { readonly now?: () => number; readonly maxMemories?: number; readonly onChange?: () => void; readonly closestByCode?: number } = {}) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.#db = new Database(path, { create: true })
     this.#now = options.now ?? Date.now
     this.#max = options.maxMemories ?? MAX_MEMORIES
     this.#onChange = options.onChange
+    this.#closestByCode = Math.max(1, options.closestByCode ?? CLOSEST_BY_CODE)
     this.#db.run("PRAGMA journal_mode = WAL")
     this.#db.run("PRAGMA busy_timeout = 5000")
     this.#db.run(`CREATE TABLE IF NOT EXISTS memories (
@@ -78,7 +86,11 @@ export class LocalMemory implements MemoryProvider {
     this.#db.run("CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text); END")
     this.#db.run("CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF text ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text); INSERT INTO memories_fts(rowid, text) VALUES (new.rowid, new.text); END")
     // One vector per memory and embedding model. A memory's vectors go when it goes or its text changes.
-    this.#db.run("CREATE TABLE IF NOT EXISTS memory_vectors (memory_id TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (memory_id, model))")
+    this.#db.run("CREATE TABLE IF NOT EXISTS memory_vectors (memory_id TEXT NOT NULL, model TEXT NOT NULL, vector BLOB NOT NULL, scope TEXT, code BLOB, PRIMARY KEY (memory_id, model))")
+    // Checked again under the write lock: another engine may be giving the codes at the same moment.
+    if (!this.#hasCodes()) this.#db.transaction(() => this.#hasCodes() || this.#codeOldVectors()).immediate()
+    // A scan reads scopes and codes from this index alone, never the vectors.
+    this.#db.run("CREATE INDEX IF NOT EXISTS memory_vectors_codes ON memory_vectors (model, scope, memory_id, code)")
     this.#db.run("CREATE TRIGGER IF NOT EXISTS memory_vectors_ad AFTER DELETE ON memories BEGIN DELETE FROM memory_vectors WHERE memory_id = old.id; END")
     this.#db.run("CREATE TRIGGER IF NOT EXISTS memory_vectors_au AFTER UPDATE OF text ON memories BEGIN DELETE FROM memory_vectors WHERE memory_id = old.id; END")
   }
@@ -240,8 +252,8 @@ export class LocalMemory implements MemoryProvider {
   storeVectors(model: string, entries: readonly { readonly id: string; readonly text: string; readonly vector: Float32Array }[]): number {
     let stored = 0
     this.#db.transaction(() => {
-      const insert = this.#db.query("INSERT OR REPLACE INTO memory_vectors (memory_id, model, vector) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE id = ? AND text = ?)")
-      for (const entry of entries) stored += insert.run(entry.id, model, vectorBlob(entry.vector), entry.id, entry.text).changes > 0 ? 1 : 0
+      const insert = this.#db.query("INSERT OR REPLACE INTO memory_vectors (memory_id, model, vector, scope, code) SELECT ?, ?, ?, scope, ? FROM memories WHERE id = ? AND text = ?")
+      for (const entry of entries) stored += insert.run(entry.id, model, vectorBlob(entry.vector), codeBlob(signCode(entry.vector)), entry.id, entry.text).changes > 0 ? 1 : 0
     }).immediate()
     this.#generation += 1
     return stored
@@ -257,10 +269,17 @@ export class LocalMemory implements MemoryProvider {
   /** The memories closest in meaning to `query`, a unit vector from the same model, most similar first. */
   similar(model: string, query: Float32Array, scopes: readonly MemoryScope[], limit: number): readonly SimilarHit[] {
     if (scopes.length === 0 || limit < 1) return []
-    const scored = this.#scopeVectors(model, scopes)
-      .map((row) => ({ id: row.id, similarity: similarity(query, row.vector) }))
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit)
+    // One read transaction, so the codes and the vectors compared come from the same moment of the file.
+    const scored = this.#db.transaction(() => {
+      const candidates = this.#closest(model, signCode(query), scopes)
+      if (candidates.length === 0) return []
+      return this.#db
+        .query<{ readonly id: string; readonly vector: Uint8Array }, string[]>(`SELECT memory_id AS id, vector FROM memory_vectors WHERE model = ? AND memory_id IN (${candidates.map(() => "?").join(", ")})`)
+        .all(model, ...candidates)
+        .map((row) => ({ id: row.id, similarity: similarity(query, blobVector(row.vector)) }))
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit)
+    })()
     if (scored.length === 0) return []
     const rows = this.#db.query<Row, string[]>(`SELECT * FROM memories WHERE id IN (${scored.map(() => "?").join(", ")})`).all(...scored.map((hit) => hit.id))
     const byId = new Map(rows.map((row) => [row.id, toMemory(row)]))
@@ -270,19 +289,58 @@ export class LocalMemory implements MemoryProvider {
     })
   }
 
-  #scopeVectors(model: string, scopes: readonly MemoryScope[]): readonly { readonly id: string; readonly vector: Float32Array }[] {
+  /** The ids of the memories whose codes differ least from `code`, at most `closestByCode` of them. */
+  #closest(model: string, code: Uint32Array, scopes: readonly MemoryScope[]): readonly string[] {
+    const known = this.#scopeCodes(model, scopes)
+    if (known.ids.length <= this.#closestByCode) return known.ids
+    if (known.words !== code.length) return []
+    const distances = new Uint16Array(known.ids.length)
+    const counts = new Uint32Array(code.length * 32 + 1)
+    for (let index = 0; index < distances.length; index += 1) {
+      const distance = codeDistance(code, known.codes, index * known.words)
+      distances[index] = distance
+      counts[distance]! += 1
+    }
+    // Every code closer than `cutoff` is kept, and as many at `cutoff` as there is room for.
+    let cutoff = 0
+    let closer = 0
+    while (closer + counts[cutoff]! < this.#closestByCode) closer += counts[cutoff++]!
+    let room = this.#closestByCode - closer
+    const kept: string[] = []
+    distances.forEach((distance, index) => {
+      if (distance < cutoff || (distance === cutoff && room-- > 0)) kept.push(known.ids[index]!)
+    })
+    return kept
+  }
+
+  #scopeCodes(model: string, scopes: readonly MemoryScope[]): { readonly ids: readonly string[]; readonly codes: Uint32Array; readonly words: number } {
     const key = `${model}\0${[...scopes].sort().join("\0")}`
     // `data_version` moves when another process commits to the file; `#generation` when this one does.
     const version = this.#db.query<{ readonly data_version: number }, []>("PRAGMA data_version").get()?.data_version ?? 0
-    const cached = this.#vectors
-    if (cached !== undefined && cached.key === key && cached.version === version && cached.generation === this.#generation) return cached.rows
-    const marks = scopes.map(() => "?").join(", ")
+    const cached = this.#codes
+    if (cached !== undefined && cached.key === key && cached.version === version && cached.generation === this.#generation) return cached
     const rows = this.#db
-      .query<{ readonly id: string; readonly vector: Uint8Array }, (string | number)[]>(`SELECT v.memory_id AS id, v.vector FROM memory_vectors v JOIN memories m ON m.id = v.memory_id WHERE v.model = ? AND m.scope IN (${marks}) ORDER BY m.updated_at DESC LIMIT ${String(MAX_COMPARED)}`)
+      .query<{ readonly id: string; readonly code: Uint8Array }, string[]>(`SELECT memory_id AS id, code FROM memory_vectors WHERE model = ? AND scope IN (${scopes.map(() => "?").join(", ")})`)
       .all(model, ...scopes)
-      .map((row) => ({ id: row.id, vector: blobVector(row.vector) }))
-    this.#vectors = { key, version, generation: this.#generation, rows }
-    return rows
+    const words = (rows[0]?.code.byteLength ?? 0) / 4
+    const usable = rows.filter((row) => row.code.byteLength === words * 4)
+    const codes = new Uint32Array(usable.length * words)
+    usable.forEach((row, index) => codes.set(new Uint32Array(row.code.slice().buffer), index * words))
+    this.#codes = { key, version, generation: this.#generation, ids: usable.map((row) => row.id), codes, words }
+    return this.#codes
+  }
+
+  #hasCodes(): boolean {
+    return this.#db.query<{ readonly name: string }, []>("PRAGMA table_info(memory_vectors)").all().some((column) => column.name === "code")
+  }
+
+  // A file written before codes: its vectors get their memory's scope and a code, once.
+  #codeOldVectors(): void {
+    this.#db.run("ALTER TABLE memory_vectors ADD COLUMN scope TEXT")
+    this.#db.run("ALTER TABLE memory_vectors ADD COLUMN code BLOB")
+    this.#db.run("UPDATE memory_vectors SET scope = (SELECT scope FROM memories WHERE id = memory_vectors.memory_id)")
+    const set = this.#db.query("UPDATE memory_vectors SET code = ? WHERE rowid = ?")
+    for (const row of this.#db.query<{ readonly rowid: number; readonly vector: Uint8Array }, []>("SELECT rowid, vector FROM memory_vectors").all()) set.run(codeBlob(signCode(blobVector(row.vector))), row.rowid)
   }
 
   #changed(): void {
