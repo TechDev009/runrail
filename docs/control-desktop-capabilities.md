@@ -460,8 +460,9 @@ and shows exactly what goes to GitHub.
 on a project's engine. A setup names a `planner`, an `executor`, and a
 `reviewer` (each `{ route, model?, connectionId?, effort?, access? }`) and its
 `rules`: `approvePlan`, `reviewRounds` (0 to 5; above 0 needs a reviewer),
-`check` (a command for `check.run`), and `budget { maxTurns, maxMinutes }`
-(defaults 40 and 120).
+`check` (a command for `check.run`), and `budget { maxTurns, maxMinutes,
+maxTokens? }` (defaults 40 and 120; tokens 1,000 to 1,000,000,000, no limit
+when left out).
 
 - The person's setups are in `~/.runrail/setups.json` (embedders pass
   `setupsPath`); the person's entries win by id over a project's in
@@ -491,7 +492,8 @@ on a project's engine. A setup names a `planner`, an `executor`, and a
   stepId, role, thread, runsOn, mode: plan | agent, access, title, prompt }`.
   The desktop runs it as a thread (`thread` is the same for every turn of a
   role) and answers `setup.run.answer { runId, stepId, ok, text?, worktree?,
-  error? }`; the first answer names the worktree the run checks. An approval
+  error?, tokens? }`; the first answer names the worktree the run checks, and
+  `tokens` is the thread's input and output so far. An approval
   waits as `waiting: { kind: "approve", stepId, plan }` and is answered with `{
   approved, plan?, feedback? }`; feedback sends the plan back to the planner, up
   to three times.
@@ -500,7 +502,20 @@ on a project's engine. A setup names a `planner`, an `executor`, and a
   `steps` (kind, title, status, role, and a short note such as a check's
   counts; never an answer's text), and `error { code, message }`: for example
   `SETUP_BUDGET`, `SETUP_PLAN_FORMAT`, `SETUP_PLAN_DECLINED`,
-  `SETUP_TURN_FAILED`. Runs live in the engine's memory and end with it.
+  `SETUP_TURN_FAILED`. `tokens` is the sum of each role thread's latest count,
+  checked against `maxTokens` before each turn.
+- An engine started with `setupRunsDir` (the CLI's `control` uses
+  `~/.runrail/setup-runs`) saves each run a person started, with its engine's
+  process id, as it goes: the setup, the task, the plan, and the steps' states,
+  never a turn's answer, in a file only the person can read. Runs an eval or a workflow started are not saved. When the engine
+  stops, a running run's file is kept. `setup.run.saved` returns `{ projects:
+  [{ root, runs }] }`: the projects with saved runs whose engine is gone.
+  `setup.run.restore` on that project's engine takes them back and returns `{
+  runs }`. Done steps stay done, a step that was mid-turn is `skipped` with the
+  note `interrupted`, the time already spent counts against `maxMinutes`, and
+  the next turn is told the engine restarted. Only the engine the desktop
+  sends it to restores, so thread engines in the same checkout never run a step
+  twice.
 - A run an eval started carries `worktree { id, path, cwd, branch? }` on each
   waiting turn: every role's thread runs in that worktree.
 
@@ -523,16 +538,16 @@ history, suites of them, and runs that score setups against a suite.
   and `eval.suite.save { suite: { name, check, cases } }`.
 - `eval.run { suite, setupIds, cases?, repeats?, parallel?, maxMinutes? }`
   runs every case with every setup (1 to 4) `repeats` times (1 to 5), up to
-  `parallel` at once (1 to 4), and stops at `maxMinutes` (default 120). One
-  eval runs at a time in a project (`CONTROL_EVAL_LIMIT`, 429). Each case gets
+  `parallel` at once (1 to 4), and stops at `maxMinutes` (default 120). Up to
+  four evals run at once in a project (`CONTROL_EVAL_LIMIT`, 429). Each case gets
   a worktree at `base` with its tests removed; the task is the fix commit's
   message. The setup run waits on the desktop as usual; when it ends, the tests
   come back from `fix` and the suite's check scores it.
 - `eval.status { runId }`, `eval.list`, and `eval.stop { runId }`. A status
   has `state` (`running`, `succeeded`, `stopped`, `failed`), the setups and
   cases, and `jobs: [{ caseId, setupId, repeat, state, setupRunId?,
-  setupState?, worktree?, turns?, durationMs?, check?: { exitCode?, timedOut,
-  counts? }, error? }]`, a job's `state` one of `queued`, `running`,
+  setupState?, worktree?, turns?, tokens?, durationMs?, check?: { exitCode?,
+  timedOut, counts? }, error? }]`, a job's `state` one of `queued`, `running`,
   `checking`, `passed`, `failed`, `skipped`, `error`; `error` is a code.
   Results are in `~/.runrail/evals/<project>/<runId>/` (`run.json` and
   `results.jsonl`; embedders pass `evalsDir`) and keep ids, states, counts, and

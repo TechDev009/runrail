@@ -471,6 +471,23 @@ Desktop capability states, workspace controls, caller-owned transcripts, and
 the optional terminal bridge are documented in
 [`docs/control-desktop-capabilities.md`](control-desktop-capabilities.md).
 
+## Evals with no desktop
+
+Run a saved eval suite against setups from a terminal or CI. Each case's turns
+run in this process, on each role's route, model, and access, and the results
+land where Runrail Desktop lists them:
+
+```sh
+bun run src/cli.ts eval run --suite parser --setup solo --setup pair --cwd /path/to/project
+bun run src/cli.ts eval list --cwd /path/to/project
+```
+
+`--case` (repeatable) picks cases, `--repeats` (1 to 5), `--parallel` (1 to 4),
+and `--max-minutes` bound the run, and `--json` prints the final status. No one
+is there to answer an approval, so a role works within its access and anything
+beyond it is declined. The command exits 0 when every case ran, whatever the
+score, and 1 when the eval stopped or failed; Ctrl-C stops it.
+
 ## Native bounded tools
 
 The native backend provides a small coding loop through Nifra's public model

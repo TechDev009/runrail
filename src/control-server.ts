@@ -48,7 +48,7 @@ import {
 import { createNativeControlRuntime, nativeTaskController, type NativeControlRuntime } from "./control-native.ts"
 import { dispatchControlGit, dispatchControlWorktree, isControlGitMethod, isControlWorktreeMethod } from "./control-git.ts"
 import { CheckError, CheckRuns, CHECK_DEFAULT_TIMEOUT_MS, CHECK_MAX_TIMEOUT_MS } from "./check/run.ts"
-import { SetupRuns } from "./setups/runner.ts"
+import { savedSetupRunProjects, SetupRuns } from "./setups/runner.ts"
 import { parseSetup, parseSetupRole, SetupError } from "./setups/schema.ts"
 import { SetupStore } from "./setups/store.ts"
 import { linkDependencies, mineCandidates, validateCase } from "./evals/mine.ts"
@@ -159,6 +159,8 @@ export interface RunrailControlRpcServerOptions extends RunrailSessionOptions {
   readonly setupsPath?: string
   /** Eval results, one folder per project. Defaults to `~/.runrail/evals`. */
   readonly evalsDir?: string
+  /** Setup runs in progress, one folder per project, so they continue after a restart. Without it nothing is saved. */
+  readonly setupRunsDir?: string
   /** Memory and its sources, shared by every engine. Defaults to `~/.runrail/memory`. */
   readonly memoryDir?: string
   /** Every project's workflows. Defaults to `~/.runrail/workflows.json`. */
@@ -226,6 +228,8 @@ interface ControlServices {
   readonly checks: CheckRuns
   readonly setups: SetupStore
   readonly setupRuns: SetupRuns
+  /** Every project's saved setup runs, a folder each. */
+  readonly setupRunsDir?: string
   readonly suites: SuiteStore
   readonly evalRuns: EvalRuns
   /** Opened on the first `memory.*` call: an engine that never uses memory never opens its file. */
@@ -426,7 +430,10 @@ async function serveControl(
   const codeHosts = new CodeHostStore(join(nativeRuntime.accountsRoot, "codehosts.json"))
   const worktrees = new ThreadWorktrees({ root: workspaceRoot, baseDir: resolve(options.worktreeRoot ?? join(homedir(), ".runrail", "worktrees")) })
   const checks = new CheckRuns()
+  const setupRunsDir = options.setupRunsDir === undefined ? undefined : resolve(options.setupRunsDir)
   const setupRuns = new SetupRuns({
+    ...(setupRunsDir === undefined ? {} : { saveDir: join(setupRunsDir, createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16)) }),
+    root: workspaceRoot,
     check: async (input) => {
       if (input.cwd !== undefined) return checks.run({ id: input.id, cwd: input.cwd, command: input.command, timeoutMs: CHECK_DEFAULT_TIMEOUT_MS })
       if (input.worktree === undefined) return checks.run({ id: input.id, cwd: workspaceRoot, command: input.command, timeoutMs: CHECK_DEFAULT_TIMEOUT_MS })
@@ -450,6 +457,7 @@ async function serveControl(
     checks,
     setups,
     setupRuns,
+    ...(setupRunsDir === undefined ? {} : { setupRunsDir }),
     suites: new SuiteStore(workspaceRoot),
     evalRuns: new EvalRuns({
       root: workspaceRoot,
@@ -1046,7 +1054,10 @@ async function dispatch(
     case "setup.run.list":
     case "setup.run.answer":
     case "setup.run.stop":
+    case "setup.run.restore":
       return setupRpc(services, method, params)
+    case "setup.run.saved":
+      return { projects: services.setupRunsDir === undefined ? [] : await savedSetupRunProjects(services.setupRunsDir) }
     case "eval.mine":
     case "eval.validate":
     case "eval.suites":
@@ -3966,6 +3977,8 @@ async function setupRpc(services: ControlServices, method: string, params: Recor
         return { runs: services.setupRuns.list() }
       case "setup.run.answer":
         return services.setupRuns.answer(runId(), typeof params.stepId === "string" ? params.stepId : invalid("stepId is required"), params)
+      case "setup.run.restore":
+        return { runs: await services.setupRuns.restore() }
       default:
         return await services.setupRuns.stop(runId())
     }

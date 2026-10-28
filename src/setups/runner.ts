@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto"
+import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import type { RunPlan } from "@nifrajs/agent-protocol"
+import { readBoundedText } from "../runtime/bounded-read.ts"
 import type { CheckResult } from "../check/run.ts"
 import { RunrailPlanRunner } from "../plan-runner.ts"
-import { PLAN_FORMAT, parsePlanBlock, planOf, SetupError, type Setup, type SetupAccess, type SetupPlan, type SetupRole, type SetupRoleName } from "./schema.ts"
+import { PLAN_FORMAT, parsePlanBlock, parseSetup, planOf, SetupError, type Setup, type SetupAccess, type SetupPlan, type SetupRole, type SetupRoleName } from "./schema.ts"
 
 /**
  * A setup run: plan, approve, execute step by step with a check after each, then review
  * and fix for the setup's rounds. The engine decides every next step. A coding-tool turn is
  * handed to a `SetupTurnPort`: the desktop runs it as a thread the person can watch, or a headless
- * port runs it in process. Prompts and answers live only in memory, for the run's life.
+ * port runs it in process. Answers live only in memory. With `saveDir`, a run the person started
+ * keeps its task, plan, and progress in a private file until it ends, so it continues after the
+ * engine restarts; a workflow's or an eval's run ends with its owner.
  */
 
 export interface SetupTurnRequest {
@@ -42,10 +47,14 @@ export interface SetupTurnAnswer {
   /** The worktree the run works in; the first turn's answer names it. */
   readonly worktree?: string
   readonly error?: string
+  /** The thread's input and output tokens so far, when its route reports them. */
+  readonly tokens?: number
 }
 
 export interface SetupTurnPort {
   turn(runId: string, request: SetupTurnRequest, signal: AbortSignal): Promise<SetupTurnAnswer>
+  /** The run ended, however it ended: a port that keeps its threads may let them go. */
+  release?(runId: string): Promise<void>
 }
 
 export interface SetupApproval {
@@ -88,6 +97,8 @@ export interface SetupRunStatus {
   readonly startedAt: number
   readonly endedAt?: number
   readonly turns: number
+  /** Tokens across the run's threads, once a turn has reported any. */
+  readonly tokens?: number
   readonly worktree?: string
   /** It works in the project's checkout, not a worktree. */
   readonly checkout?: true
@@ -110,11 +121,18 @@ export interface SetupRunsOptions {
   readonly stopCheck?: (id: string) => Promise<unknown>
   readonly now?: () => number
   readonly maxRuns?: number
+  /** This project's folder for runs in progress; nothing is saved without it. */
+  readonly saveDir?: string
+  /** The project, written with each saved run so the app knows which project's engine continues it. */
+  readonly root?: string
 }
 
 const MAX_SEND_BACKS = 3
 const MAX_KEPT_RUNS = 32
 const CHECK_TAIL_FOR_PROMPT = 8_000
+const SAVED_RUN = /^setup-[0-9a-f-]{36}\.json$/
+const MAX_SAVED_RUN_BYTES = 1024 * 1024
+const RESUME_NOTE = "Runrail restarted while this run was in progress. What was done before is still in the worktree: check where it stands, then carry on with the request below."
 
 class RunStopped extends Error {
   constructor(
@@ -137,6 +155,8 @@ interface Run {
   state: SetupRunState
   endedAt?: number
   turns: number
+  /** Each thread's latest total; a thread reports what it has used since it began. */
+  readonly threadTokens: Map<string, number>
   worktree?: string
   plan?: SetupPlan
   steps: SetupRunStep[]
@@ -147,6 +167,19 @@ interface Run {
   /** The latest check's verdict; a run that ends on a failing check has not succeeded. */
   lastCheckPassed?: boolean
   settled: Promise<void>
+  /** The person approved the plan. */
+  approved: boolean
+  /** Plan steps done, with their checks and fixes. */
+  executed: number
+  reviewed: number
+  /** Time earlier engines ran it; the minutes budget counts only time an engine was running it. */
+  readonly priorMs: number
+  readonly resumedAt: number
+  /** Until its first turn, a continued run tells the agent the engine restarted. */
+  resumed: boolean
+  /** The engine is closing: the run keeps its saved file to continue later. */
+  closing: boolean
+  saving: Promise<void>
 }
 
 /** Runs setups in this project. A run waits on the desktop for each turn through `pending`. */
@@ -177,14 +210,65 @@ export class SetupRuns {
       ...(options.owner === undefined ? {} : { owner: options.owner }),
       state: "running",
       turns: 0,
+      threadTokens: new Map(),
       steps: [],
       settled: Promise.resolve(),
+      approved: false,
+      executed: 0,
+      reviewed: 0,
+      priorMs: 0,
+      resumedAt: this.#now(),
+      resumed: false,
+      closing: false,
+      saving: Promise.resolve(),
       ...(options.worktree === undefined ? {} : { given: options.worktree, worktree: options.worktree.id }),
     }
     this.#runs.set(id, run)
     this.#prune()
+    this.#save(run)
     run.settled = this.#execute(run, port)
     return this.status(id)
+  }
+
+  /**
+   * Continues the runs an earlier engine left in `saveDir`. Only the project's own engine should
+   * call it, once: two engines continuing one run would each run its turns.
+   */
+  async restore(port: SetupTurnPort = this.pending): Promise<readonly SetupRunStatus[]> {
+    const dir = this.options.saveDir
+    if (dir === undefined) return []
+    const names = (await readdir(dir).catch(() => [] as string[])).filter((name) => SAVED_RUN.test(name)).slice(0, this.options.maxRuns ?? 4)
+    const restored: SetupRunStatus[] = []
+    for (const name of names) {
+      const runId = name.slice(0, -".json".length)
+      if (this.#runs.has(runId)) continue
+      const value = await readBoundedText(join(dir, name), MAX_SAVED_RUN_BYTES).then((text) => JSON.parse(text) as unknown, () => undefined)
+      // Another engine that is still running keeps its own runs going.
+      if (runningElsewhere(value)) continue
+      const saved = savedRun(value, runId, this.options.root)
+      if (saved === undefined) {
+        await rm(join(dir, name), { force: true }).catch(() => undefined)
+        continue
+      }
+      const run: Run = {
+        ...saved,
+        controller: new AbortController(),
+        checkout: saved.checkout,
+        state: "running",
+        threadTokens: new Map(Object.entries(saved.threadTokens)),
+        // A step the engine stopped in the middle of runs again from its start.
+        steps: saved.steps.map((step) => (step.status === "running" ? { ...step, status: "skipped" as const, note: "interrupted" } : step)),
+        settled: Promise.resolve(),
+        resumedAt: this.#now(),
+        resumed: true,
+        closing: false,
+        saving: Promise.resolve(),
+      }
+      this.#runs.set(run.id, run)
+      run.settled = this.#execute(run, port)
+      restored.push(this.status(run.id))
+    }
+    return restored
   }
 
   status(runId: string): SetupRunStatus {
@@ -198,6 +282,7 @@ export class SetupRuns {
       startedAt: run.startedAt,
       ...(run.endedAt === undefined ? {} : { endedAt: run.endedAt }),
       turns: run.turns,
+      ...(run.threadTokens.size === 0 ? {} : { tokens: runTokens(run) }),
       ...(run.worktree === undefined ? {} : { worktree: run.worktree }),
       ...(run.checkout ? { checkout: true as const } : {}),
       ...(run.plan === undefined ? {} : { plan: run.plan }),
@@ -236,7 +321,8 @@ export class SetupRuns {
       const worktree = typeof item.worktree === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(item.worktree) ? item.worktree : undefined
       const text = typeof item.text === "string" ? item.text.slice(-200_000) : undefined
       const error = typeof item.error === "string" ? item.error.slice(0, 500) : undefined
-      resolve({ ok: item.ok === true, ...(text === undefined ? {} : { text }), ...(worktree === undefined ? {} : { worktree }), ...(error === undefined ? {} : { error }) })
+      const tokens = typeof item.tokens === "number" && Number.isSafeInteger(item.tokens) && item.tokens >= 0 ? item.tokens : undefined
+      resolve({ ok: item.ok === true, ...(text === undefined ? {} : { text }), ...(worktree === undefined ? {} : { worktree }), ...(error === undefined ? {} : { error }), ...(tokens === undefined ? {} : { tokens }) })
     }
     return this.status(runId)
   }
@@ -251,8 +337,32 @@ export class SetupRuns {
     return this.status(runId)
   }
 
+  /** Stops every run; one that is saved keeps its file and continues when the engine is back. */
   async close(): Promise<void> {
+    for (const run of this.#runs.values()) if (this.#file(run) !== undefined && (run.state === "running" || run.state === "waiting")) run.closing = true
     await Promise.all([...this.#runs.keys()].map((id) => this.stop(id).catch(() => undefined)))
+  }
+
+  #file(run: Run): string | undefined {
+    return this.options.saveDir === undefined || run.owner !== undefined || run.given !== undefined ? undefined : join(this.options.saveDir, `${run.id}.json`)
+  }
+
+  /** Writes the run's progress, in order, after the writes before it. */
+  #save(run: Run): void {
+    const file = this.#file(run)
+    if (file === undefined || run.closing) return
+    const record = savedRecord(run, this.options.root, this.#now())
+    run.saving = run.saving
+      .then(async () => {
+        await mkdir(this.options.saveDir as string, { recursive: true, mode: 0o700 })
+        const temporary = `${file}.${randomUUID().slice(0, 8)}.tmp`
+        await writeFile(temporary, JSON.stringify(record), { mode: 0o600, flag: "wx" })
+        await rename(temporary, file).catch(async (error: unknown) => {
+          await rm(temporary, { force: true })
+          throw error
+        })
+      })
+      .catch(() => undefined)
   }
 
   #find(runId: string): Run {
@@ -281,6 +391,7 @@ export class SetupRuns {
       signal.addEventListener("abort", abort, { once: true })
       run.waiting = waiting
       run.state = "waiting"
+      this.#save(run)
       run.resolve = (value) => {
         signal.removeEventListener("abort", abort)
         resolve(value as T)
@@ -290,24 +401,31 @@ export class SetupRuns {
 
   async #execute(run: Run, port: SetupTurnPort): Promise<void> {
     const signal = run.controller.signal
-    const deadline = run.startedAt + run.setup.rules.budget.maxMinutes * 60_000
-    const budgetTimer = setTimeout(() => run.controller.abort(new RunStopped("SETUP_BUDGET", `the run reached its ${String(run.setup.rules.budget.maxMinutes)}-minute budget`)), Math.max(0, deadline - this.#now()))
+    const left = run.setup.rules.budget.maxMinutes * 60_000 - run.priorMs
+    const budgetTimer = setTimeout(() => run.controller.abort(new RunStopped("SETUP_BUDGET", `the run reached its ${String(run.setup.rules.budget.maxMinutes)}-minute budget`)), Math.max(0, left - (this.#now() - run.resumedAt)))
     const step = (kind: SetupStepKind, title: string, role?: SetupRoleName): SetupRunStep => {
       const entry: SetupRunStep = { id: `${String(run.steps.length + 1)}`, kind, title, status: "running", ...(role === undefined ? {} : { role, thread: `${run.id}:${role}` }) }
       run.steps.push(entry)
+      this.#save(run)
       return entry
     }
     const turn = async (entry: SetupRunStep, role: SetupRoleName, prompt: string): Promise<string> => {
       const runsOn = role === "planner" ? run.setup.roles.planner : role === "reviewer" ? run.setup.roles.reviewer : run.setup.roles.executor
       if (runsOn === undefined) throw new RunStopped("SETUP_INVALID", `the setup has no ${role}`)
-      if (run.turns >= run.setup.rules.budget.maxTurns) throw new RunStopped("SETUP_BUDGET", `the run reached its budget of ${String(run.setup.rules.budget.maxTurns)} turns`)
+      const budget = run.setup.rules.budget
+      if (run.turns >= budget.maxTurns) throw new RunStopped("SETUP_BUDGET", `the run reached its budget of ${String(budget.maxTurns)} turns`)
+      if (budget.maxTokens !== undefined && runTokens(run) >= budget.maxTokens) throw new RunStopped("SETUP_BUDGET", `the run reached its budget of ${budget.maxTokens.toLocaleString("en-US")} tokens`)
       run.turns += 1
+      const told = run.resumed ? `${RESUME_NOTE}\n\n${prompt}` : prompt
+      run.resumed = false
       const answer = await port.turn(
         run.id,
-        { stepId: `${entry.id}-${String(run.turns)}`, role, thread: `${run.id}:${role}`, runsOn, mode: role === "executor" ? "agent" : "plan", access: role === "executor" ? (runsOn.access ?? "ask") : "ask", title: `${run.setup.name}: ${role}`, prompt, ...(run.given === undefined ? {} : { worktree: run.given }), ...(run.checkout ? { checkout: true as const } : {}) },
+        { stepId: `${entry.id}-${String(run.turns)}`, role, thread: `${run.id}:${role}`, runsOn, mode: role === "executor" ? "agent" : "plan", access: role === "executor" ? (runsOn.access ?? "ask") : "ask", title: `${run.setup.name}: ${role}`, prompt: told, ...(run.given === undefined ? {} : { worktree: run.given }), ...(run.checkout ? { checkout: true as const } : {}) },
         signal,
       )
       if (answer.worktree !== undefined) run.worktree ??= answer.worktree
+      if (answer.tokens !== undefined) run.threadTokens.set(`${run.id}:${role}`, Math.max(answer.tokens, run.threadTokens.get(`${run.id}:${role}`) ?? 0))
+      this.#save(run)
       if (!answer.ok) throw new RunStopped("SETUP_TURN_FAILED", `the ${role}'s turn did not finish${answer.error === undefined ? "" : `: ${answer.error}`}`)
       return answer.text ?? ""
     }
@@ -328,6 +446,7 @@ export class SetupRuns {
         entry.status = result.passed ? "done" : "failed"
         entry.note = checkNote(result)
         run.lastCheckPassed = result.passed
+        this.#save(run)
         return result
       } finally {
         run.checkId = undefined
@@ -347,8 +466,9 @@ export class SetupRuns {
         id: "setup",
         kind: "sequence",
         children: [
-          ...(run.setup.roles.planner === undefined ? [] : [{ id: "plan", kind: "task" as const, step: "setup.plan" }]),
-          ...(run.setup.roles.planner !== undefined && run.setup.rules.approvePlan ? [{ id: "approve", kind: "task" as const, step: "setup.approve" }] : []),
+          // A continued run skips what it already did.
+          ...(run.setup.roles.planner === undefined || run.plan !== undefined ? [] : [{ id: "plan", kind: "task" as const, step: "setup.plan" }]),
+          ...(run.setup.roles.planner !== undefined && run.setup.rules.approvePlan && !run.approved ? [{ id: "approve", kind: "task" as const, step: "setup.approve" }] : []),
           { id: "execute", kind: "task" as const, step: "setup.execute" },
           ...(run.setup.rules.reviewRounds > 0 ? [{ id: "review", kind: "task" as const, step: "setup.review" }] : []),
         ],
@@ -369,6 +489,10 @@ export class SetupRuns {
       run.waiting = undefined
       run.resolve = undefined
       run.endedAt = this.#now()
+      const file = this.#file(run)
+      if (file !== undefined && !run.closing) run.saving = run.saving.then(() => rm(file, { force: true })).catch(() => undefined)
+      await run.saving
+      await port.release?.(run.id).catch(() => undefined)
     }
   }
 
@@ -400,6 +524,7 @@ export class SetupRuns {
       run.plan = parsed
       entry.status = "done"
       entry.note = `${String(parsed.steps.length)} step${parsed.steps.length === 1 ? "" : "s"}`
+      this.#save(run)
     })
   }
 
@@ -413,6 +538,8 @@ export class SetupRuns {
         if (answer.approved) {
           if (answer.plan !== undefined) run.plan = answer.plan
           entry.status = "done"
+          run.approved = true
+          this.#save(run)
           return
         }
         entry.status = "failed"
@@ -427,6 +554,7 @@ export class SetupRuns {
         run.plan = revised
         revise.status = "done"
         revise.note = `${String(revised.steps.length)} step${revised.steps.length === 1 ? "" : "s"}`
+        this.#save(run)
       }
     })
   }
@@ -435,23 +563,27 @@ export class SetupRuns {
     return this.#guard(run, async () => {
       const steps = run.plan?.steps ?? [{ title: taskTitle(run.task) }]
       for (const [index, item] of steps.entries()) {
+        if (index < run.executed) continue
         const entry = step("step", `${String(index + 1)}. ${item.title}`, "executor")
         await turn(entry, "executor", stepPrompt(run.task, run.plan, index))
         entry.status = "done"
         const result = await check(`Check after step ${String(index + 1)}`)
-        if (result === undefined || result.passed) continue
-        // One fix per step; what still fails is left to the review rounds.
-        const fix = step("fix", `Fix step ${String(index + 1)}'s check`, "executor")
-        await turn(fix, "executor", checkFailurePrompt(run.setup.rules.check ?? "", result))
-        fix.status = "done"
-        await check(`Check after the fix`)
+        if (result !== undefined && !result.passed) {
+          // One fix per step; what still fails is left to the review rounds.
+          const fix = step("fix", `Fix step ${String(index + 1)}'s check`, "executor")
+          await turn(fix, "executor", checkFailurePrompt(run.setup.rules.check ?? "", result))
+          fix.status = "done"
+          await check(`Check after the fix`)
+        }
+        run.executed = index + 1
+        this.#save(run)
       }
     })
   }
 
   #review(run: Run, step: StepFn, turn: TurnFn, check: CheckFn): Promise<void> {
     return this.#guard(run, async () => {
-      for (let round = 1; round <= run.setup.rules.reviewRounds; round += 1) {
+      for (let round = run.reviewed + 1; round <= run.setup.rules.reviewRounds; round += 1) {
         const entry = step("review", `Review, round ${String(round)}`, "reviewer")
         const findings = parseReviewBlock(await turn(entry, "reviewer", reviewPrompt(run.task, run.plan)))
         if (findings === undefined) {
@@ -467,14 +599,151 @@ export class SetupRuns {
         await turn(fix, "executor", fixPrompt(blocking))
         fix.status = "done"
         await check(`Check after round ${String(round)}`)
+        run.reviewed = round
+        this.#save(run)
       }
     })
+  }
+}
+
+/** The projects whose engines left runs to continue, by each saved run's `root`; `base` holds one folder per project. */
+export async function savedSetupRunProjects(base: string): Promise<readonly { readonly root: string; readonly runs: number }[]> {
+  const projects = new Map<string, number>()
+  for (const folder of (await readdir(base).catch(() => [] as string[])).filter((name) => /^[0-9a-f]{16}$/.test(name)).slice(0, 256)) {
+    for (const name of (await readdir(join(base, folder)).catch(() => [] as string[])).filter((entry) => SAVED_RUN.test(entry)).slice(0, 16)) {
+      const value = await readBoundedText(join(base, folder, name), MAX_SAVED_RUN_BYTES).then((text) => JSON.parse(text) as unknown, () => undefined)
+      const root = value !== null && typeof value === "object" ? (value as { root?: unknown }).root : undefined
+      if (typeof root === "string" && root.length > 0 && root.length <= 4_096 && !runningElsewhere(value)) projects.set(root, (projects.get(root) ?? 0) + 1)
+    }
+  }
+  return [...projects].map(([root, runs]) => ({ root, runs }))
+}
+
+function runningElsewhere(value: unknown): boolean {
+  const pid = value !== null && typeof value === "object" ? (value as { pid?: unknown }).pid : undefined
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as { code?: unknown }).code === "EPERM"
+  }
+}
+
+/** What a saved run keeps to continue: the work it was given and how far it got. Never an answer. */
+interface SavedRun {
+  readonly id: string
+  readonly setup: Setup
+  readonly task: string
+  readonly startedAt: number
+  readonly checkout: boolean
+  readonly turns: number
+  readonly threadTokens: Readonly<Record<string, number>>
+  readonly worktree?: string
+  readonly plan?: SetupPlan
+  readonly steps: SetupRunStep[]
+  readonly lastCheckPassed?: boolean
+  readonly approved: boolean
+  readonly executed: number
+  readonly reviewed: number
+  readonly priorMs: number
+}
+
+function savedRecord(run: Run, root: string | undefined, now: number): Record<string, unknown> {
+  return {
+    version: 1,
+    ...(root === undefined ? {} : { root }),
+    runId: run.id,
+    pid: process.pid,
+    setup: run.setup,
+    task: run.task,
+    startedAt: run.startedAt,
+    checkout: run.checkout,
+    turns: run.turns,
+    threadTokens: Object.fromEntries(run.threadTokens),
+    ...(run.worktree === undefined ? {} : { worktree: run.worktree }),
+    ...(run.plan === undefined ? {} : { plan: run.plan }),
+    steps: run.steps,
+    ...(run.lastCheckPassed === undefined ? {} : { lastCheckPassed: run.lastCheckPassed }),
+    approved: run.approved,
+    executed: run.executed,
+    reviewed: run.reviewed,
+    activeMs: run.priorMs + Math.max(0, now - run.resumedAt),
+  }
+}
+
+const STEP_KINDS: ReadonlySet<unknown> = new Set(["plan", "approve", "step", "check", "review", "fix"])
+const STEP_STATES: ReadonlySet<unknown> = new Set(["running", "done", "failed", "skipped"])
+const ROLE_NAMES: ReadonlySet<unknown> = new Set(["planner", "executor", "reviewer"])
+
+const count = (value: unknown, max: number): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max
+const line = (value: unknown, max: number): value is string => typeof value === "string" && value.length <= max && !value.includes("\0")
+
+/** A saved run as written above, for this project; anything else in the file is not trusted. */
+function savedRun(value: unknown, runId: string, root: string | undefined): SavedRun | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const item = value as Record<string, unknown>
+  if (item.version !== 1 || item.runId !== runId || (root !== undefined && item.root !== root)) return undefined
+  let setup: Setup
+  try {
+    setup = parseSetup(item.setup)
+  } catch {
+    return undefined
+  }
+  if (!line(item.task, 20_000) || item.task.trim().length === 0 || typeof item.startedAt !== "number" || !Number.isFinite(item.startedAt) || typeof item.checkout !== "boolean") return undefined
+  if (!count(item.turns, 500) || !count(item.executed, 20) || !count(item.reviewed, 5) || typeof item.approved !== "boolean" || typeof item.activeMs !== "number" || !Number.isFinite(item.activeMs) || item.activeMs < 0) return undefined
+  const tokens = item.threadTokens
+  if (tokens === null || typeof tokens !== "object" || Array.isArray(tokens)) return undefined
+  const threadTokens = Object.entries(tokens as Record<string, unknown>)
+  if (threadTokens.length > ROLE_NAMES.size || !threadTokens.every(([thread, used]) => ROLE_NAMES.has(thread.slice(runId.length + 1)) && thread.startsWith(`${runId}:`) && count(used, Number.MAX_SAFE_INTEGER))) return undefined
+  if (item.worktree !== undefined && (typeof item.worktree !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(item.worktree))) return undefined
+  const plan = item.plan === undefined ? undefined : item.plan !== null && typeof item.plan === "object" && !Array.isArray(item.plan) ? planOf(item.plan as Record<string, unknown>) : undefined
+  if (item.plan !== undefined && plan === undefined) return undefined
+  if (!Array.isArray(item.steps) || item.steps.length > 400) return undefined
+  const steps: SetupRunStep[] = []
+  for (const entry of item.steps as unknown[]) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined
+    const step = entry as Record<string, unknown>
+    if (!line(step.id, 16) || !STEP_KINDS.has(step.kind) || !line(step.title, 240) || !STEP_STATES.has(step.status)) return undefined
+    if ((step.role !== undefined && !ROLE_NAMES.has(step.role)) || (step.thread !== undefined && !line(step.thread, 120)) || (step.note !== undefined && !line(step.note, 200))) return undefined
+    steps.push({
+      id: step.id,
+      kind: step.kind as SetupStepKind,
+      title: step.title,
+      status: step.status as SetupRunStep["status"],
+      ...(step.role === undefined ? {} : { role: step.role as SetupRoleName }),
+      ...(step.thread === undefined ? {} : { thread: step.thread as string }),
+      ...(step.note === undefined ? {} : { note: step.note as string }),
+    })
+  }
+  return {
+    id: runId,
+    setup,
+    task: item.task,
+    startedAt: item.startedAt,
+    checkout: item.checkout,
+    turns: item.turns,
+    threadTokens: Object.fromEntries(threadTokens) as Record<string, number>,
+    ...(item.worktree === undefined ? {} : { worktree: item.worktree as string }),
+    ...(plan === undefined ? {} : { plan }),
+    steps,
+    ...(typeof item.lastCheckPassed === "boolean" ? { lastCheckPassed: item.lastCheckPassed } : {}),
+    approved: item.approved,
+    executed: item.executed,
+    reviewed: item.reviewed,
+    priorMs: item.activeMs,
   }
 }
 
 type StepFn = (kind: SetupStepKind, title: string, role?: SetupRoleName) => SetupRunStep
 type TurnFn = (entry: SetupRunStep, role: SetupRoleName, prompt: string) => Promise<string>
 type CheckFn = (title: string) => Promise<CheckResult | undefined>
+
+function runTokens(run: Run): number {
+  let total = 0
+  for (const tokens of run.threadTokens.values()) total += tokens
+  return total
+}
 
 /** A planless run's one step is named by the task's first line, bounded like a planner's step titles. */
 function taskTitle(task: string): string {

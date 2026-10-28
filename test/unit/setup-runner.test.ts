@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { CheckResult } from "../../src/check/run.ts"
 import { parseSetup } from "../../src/setups/schema.ts"
-import { SetupRuns, type SetupTurnPort, type SetupTurnRequest } from "../../src/setups/runner.ts"
+import { savedSetupRunProjects, SetupRuns, type SetupTurnPort, type SetupTurnRequest } from "../../src/setups/runner.ts"
 
 const block = (value: unknown): string => `Done.\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``
 const PLAN = block({ summary: "two steps", steps: [{ title: "Add the parser" }, { title: "Add tests", detail: "cover blank lines" }] })
@@ -168,6 +171,28 @@ test("the turn budget, a failed turn, and stop", async () => {
   expect(() => runs.answer(pending.runId, "1-1", { ok: true })).toThrow("not waiting")
 })
 
+test("the token budget: each thread reports its own total, and the run stops before a turn once they reach it", async () => {
+  const runs = new SetupRuns({ check: async () => passed(true) })
+  const reported: Record<string, number> = { planner: 0, executor: 0, reviewer: 0 }
+  const asked: string[] = []
+  const port: SetupTurnPort = {
+    turn: async (_runId, request) => {
+      asked.push(request.role)
+      reported[request.role] = (reported[request.role] ?? 0) + (request.role === "planner" ? 3_000 : 2_500)
+      return { ok: true, text: request.role === "planner" ? PLAN : "done", tokens: reported[request.role] }
+    },
+  }
+  const done = await settle(runs, runs.start(setup({ budget: { maxTurns: 40, maxTokens: 5_500 } }), "task", port).runId)
+  // Planner 3,000 + executor 2,500 = 5,500 after step 1: step 2 never starts.
+  expect(done).toMatchObject({ state: "failed", error: { code: "SETUP_BUDGET", message: "the run reached its budget of 5,500 tokens" }, tokens: 5_500, turns: 2 })
+  expect(asked).toEqual(["planner", "executor"])
+
+  expect(() => setup({ budget: { maxTokens: 10 } })).toThrow("maxTokens must be a whole number from 1000")
+  expect(setup().rules.budget.maxTokens).toBeUndefined()
+  // Without any report the status carries no token count.
+  expect((await settle(runs, runs.start(setup(), "task", scripted({ planner: [PLAN], reviewer: [CLEAN] }).port).runId)).tokens).toBeUndefined()
+})
+
 test("the pending port: a turn waits in the status until the desktop answers it", async () => {
   const runs = new SetupRuns({ check: async () => passed(true) })
   const runId = runs.start(parseSetup({ id: "solo", name: "Solo", roles: { executor: { route: "native" } }, rules: { reviewRounds: 0 } }), "Rename the flag").runId
@@ -176,6 +201,79 @@ test("the pending port: a turn waits in the status until the desktop answers it"
   expect(() => runs.answer(runId, "wrong", { ok: true })).toThrow("not waiting")
   runs.answer(runId, status.waiting?.stepId ?? "", { ok: true, text: "done", worktree: "wt-1" })
   expect(await settle(runs, runId)).toMatchObject({ state: "succeeded", worktree: "wt-1", turns: 1 })
+})
+
+test("a run the person started is saved as it goes, outlives a closed engine, and continues where it stopped", async () => {
+  const base = await mkdtemp(join(tmpdir(), "runrail-setup-runs-"))
+  const saveDir = join(base, "0123456789abcdef")
+  try {
+    const first = new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/app" })
+    const runId = first.start(setup({ approvePlan: true }), "Skip blank lines").runId
+    const answer = async (runs: SetupRuns, kind: "turn" | "approve", value: Record<string, unknown>) => {
+      const status = await waitFor(runs, runId, kind)
+      runs.answer(runId, status.waiting?.stepId ?? "", value)
+      return status
+    }
+    await answer(first, "turn", { ok: true, text: PLAN, worktree: "wt-run", tokens: 1_200 })
+    await answer(first, "approve", { approved: true })
+    await answer(first, "turn", { ok: true, text: "Edited the parser.", tokens: 900 })
+    // The engine closes while step 2 waits on the executor.
+    expect((await waitFor(first, runId, "turn")).waiting).toMatchObject({ role: "executor", prompt: expect.stringContaining("Do step 2 of 2") })
+    await first.close()
+    const file = join(saveDir, `${runId}.json`)
+    expect((await stat(saveDir)).mode & 0o777).toBe(0o700)
+    expect((await stat(file)).mode & 0o777).toBe(0o600)
+    const saved = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>
+    expect(saved).toMatchObject({ version: 1, root: "/work/app", runId, task: "Skip blank lines", approved: true, executed: 1, reviewed: 0, worktree: "wt-run", turns: 3 })
+    // Progress, not answers.
+    expect(JSON.stringify(saved)).not.toContain("Edited the parser")
+    expect(await savedSetupRunProjects(base)).toEqual([{ root: "/work/app", runs: 1 }])
+
+    const second = new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/app" })
+    expect((await second.restore()).map((run) => run.runId)).toEqual([runId])
+    // Step 2 runs again, told the engine restarted; nothing before it does.
+    const resumed = await answer(second, "turn", { ok: true, text: "done" })
+    expect(resumed.waiting).toMatchObject({ role: "executor", thread: `${runId}:executor`, prompt: expect.stringMatching(/^Runrail restarted while this run was in progress[\s\S]*Do step 2 of 2/) })
+    expect(resumed.steps.filter((step) => step.note === "interrupted").map((step) => step.title)).toEqual(["2. Add tests"])
+    const reviewer = await answer(second, "turn", { ok: true, text: CLEAN })
+    expect(reviewer.waiting).toMatchObject({ role: "reviewer" })
+    expect(reviewer.waiting?.kind === "turn" && reviewer.waiting.prompt.startsWith("Runrail restarted")).toBe(false)
+    expect(await settle(second, runId)).toMatchObject({ state: "succeeded", turns: 5, tokens: 2_100, worktree: "wt-run" })
+    // An ended run leaves nothing behind, and a second restore finds nothing.
+    expect(await readdir(saveDir)).toEqual([])
+    expect(await new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/app" }).restore()).toEqual([])
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
+})
+
+test("a stopped run, a workflow's run, and a file from another project or a live engine are not continued", async () => {
+  const saveDir = await mkdtemp(join(tmpdir(), "runrail-setup-runs-"))
+  try {
+    const runs = new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/app" })
+    const stopped = runs.start(setup(), "task").runId
+    await waitFor(runs, stopped, "turn")
+    await runs.stop(stopped)
+    const owned = runs.start(setup(), "task", runs.pending, { owner: { kind: "workflow", runId: "wf-1", name: "Nightly" } }).runId
+    await waitFor(runs, owned, "turn")
+    expect(await readdir(saveDir)).toEqual([])
+    await runs.close()
+    expect(await readdir(saveDir)).toEqual([])
+
+    const kept = runs.start(setup(), "task").runId
+    await waitFor(runs, kept, "turn")
+    const record = JSON.parse(await readFile(join(saveDir, `${kept}.json`), "utf8")) as Record<string, unknown>
+    await runs.stop(kept)
+    // Written by another engine that is still running: this one leaves it alone.
+    await writeFile(join(saveDir, `${kept}.json`), JSON.stringify({ ...record, pid: process.ppid }))
+    expect(await new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/app" }).restore()).toEqual([])
+    await writeFile(join(saveDir, `${kept}.json`), JSON.stringify({ ...record, pid: 0 }))
+    expect(await new SetupRuns({ check: async () => passed(true), saveDir, root: "/work/other" }).restore()).toEqual([])
+    // A file that is not this project's run is removed, not trusted.
+    expect(await readdir(saveDir)).toEqual([])
+  } finally {
+    await rm(saveDir, { recursive: true, force: true })
+  }
 })
 
 async function waitFor(runs: SetupRuns, runId: string, kind: "turn" | "approve") {

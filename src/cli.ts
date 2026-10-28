@@ -5,7 +5,7 @@
 // Plain sh, because BusyBox's env has no -S.
 import { createHash } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { realpath, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { createInterface } from "node:readline/promises"
@@ -18,7 +18,12 @@ import {
   type PiBackendOptions,
 } from "@nifrajs/coding-agent"
 import { verificationFingerprint } from "./repair/controller.ts"
-import { createRunrailSession, DEFAULT_MAX_STEPS, MAX_REPLY_CHARS, MIN_REPLY_CHARS } from "./session.ts"
+import { createRunrailSession, DEFAULT_MAX_STEPS, MAX_REPLY_CHARS, MIN_REPLY_CHARS, type RunrailSession } from "./session.ts"
+import { runHeadlessEval } from "./evals/headless.ts"
+import { EvalRuns, type EvalJobState, type EvalRunStatus } from "./evals/run.ts"
+import { SuiteStore } from "./evals/suite.ts"
+import { SetupRuns, type SetupTurnRequest } from "./setups/runner.ts"
+import type { SetupAccess } from "./setups/schema.ts"
 import { nifraNotice, verificationGateAvailable } from "./nifra.ts"
 import { parseNewCliArgs, runNewCli } from "./starters.ts"
 import { runRunrailConsole } from "./console.ts"
@@ -29,7 +34,7 @@ import type { ModelCapability, ModelCatalog, ModelDescriptor, ModelQuality, Mode
 import type { RunrailBudget, RunrailUsage } from "./model/budget.ts"
 import type { CommandModelOptions } from "./model/command.ts"
 import { createDefaultModelCatalog, isThinkingLevel } from "./model/catalog.ts"
-import type { ModelCache, RunrailMetrics } from "./runtime/metrics.ts"
+import { RunrailMetrics, type ModelCache } from "./runtime/metrics.ts"
 import { createPluginManager } from "./plugins/manager.ts"
 import type { PluginManager } from "./plugins/manager.ts"
 import { createPiMigrationPlan, PiResourceAdapter } from "./plugins/pi/index.ts"
@@ -54,7 +59,7 @@ import { createDefaultProviderCatalog, discoverProviderModels } from "./provider
 import { createDefaultHarnessAdapters } from "./harness/defaults.ts"
 import { mayContinue } from "./harness/event-text.ts"
 import { HarnessRegistry } from "./harness/registry.ts"
-import { HARNESS_EFFORTS, HARNESS_PERMISSION_MODES, parseHarnessLaunchOptions, type HarnessEffort, type HarnessLaunchOptions, type HarnessPermissionMode } from "./harness/launch.ts"
+import { effortFromThinking, HARNESS_EFFORTS, HARNESS_PERMISSION_MODES, parseHarnessLaunchOptions, type HarnessEffort, type HarnessLaunchOptions, type HarnessPermissionMode } from "./harness/launch.ts"
 import { HARNESS_PROTOCOLS, type HarnessAuthMode, type HarnessAuthOptions, type HarnessProtocol } from "./harness/types.ts"
 import type { HarnessAccountOptions } from "./harness/account.ts"
 import { createDefaultPiCompatibilityMatrix, summarizePiCompatibilityMatrix } from "./compatibility/index.ts"
@@ -80,7 +85,7 @@ import { offerAgentSdk, parseSdkCliRequest, runSdkCli, type SdkCliRequest } from
 import type { TranscriptStore } from "./transcript/store.ts"
 import { terminalText } from "./workbench/terminal-text.ts"
 export type RunrailBackendName = "replay" | "native" | "pi" | "codex" | "claude-code" | "copilot" | "opencode" | "gemini" | "goose"
-export type RunrailCommand = "run" | "pi" | "backends" | "models" | "providers" | "harnesses" | "compatibility" | "plugins" | "packages" | "serve" | "control" | "console" | "benchmark" | "mcp" | "browser-mcp" | "connectors-mcp" | "threads-mcp" | "computer-mcp" | "images-mcp" | "login" | "logout" | "auth" | "service" | "sessions" | "export" | "doctor" | "sdk"
+export type RunrailCommand = "run" | "pi" | "backends" | "models" | "providers" | "harnesses" | "compatibility" | "plugins" | "packages" | "serve" | "control" | "console" | "benchmark" | "mcp" | "browser-mcp" | "connectors-mcp" | "threads-mcp" | "computer-mcp" | "images-mcp" | "login" | "logout" | "auth" | "service" | "sessions" | "export" | "doctor" | "sdk" | "eval"
 export type VerificationName = "check" | "assure" | "test"
 export type RunrailTerminalStatus =
   | "succeeded"
@@ -230,6 +235,8 @@ export interface CliOptions {
   /** `doctor --cwd`: a project folder to check as well. */
   readonly doctorCwd?: string
   readonly sdkCli?: SdkCliRequest
+  /** `eval list`, or `eval run`: a suite against setups, with no desktop. */
+  readonly evalCli?: { readonly action: "list" } | { readonly action: "run"; readonly suite: string; readonly setupIds: readonly string[]; readonly cases?: readonly string[]; readonly repeats?: number; readonly parallel?: number; readonly maxMinutes?: number }
 }
 
 export interface RunrailRunOptions {
@@ -381,13 +388,14 @@ export function parseCliArgs(argv: readonly string[], env: Readonly<Record<strin
   if (argv[0] === "sessions") return parseSessionsCliArgs(argv.slice(1))
   if (argv[0] === "export") return parseExportCliArgs(argv.slice(1))
   if (argv[0] === "doctor") return parseDoctorCliArgs(argv.slice(1))
+  if (argv[0] === "eval") return parseEvalCliArgs(argv.slice(1))
   if (argv[0] === "sdk") {
     const sdkCli = parseSdkCliRequest(argv.slice(1))
     return { command: "sdk", cwd: resolve("."), backend: "native", maxSteps: DEFAULT_MAX_STEPS, maxRepairAttempts: 2, verify: "check", json: sdkCli.json, task: "", piArgs: Object.freeze([]), sdkCli }
   }
   const command = argv[0]
   if (command !== "run" && command !== "serve" && command !== "control" && command !== "console")
-    throw new Error("usage: runrail run|serve|control|console|sessions|export|doctor|sdk|benchmark|mcp|providers|harnesses|compatibility|login|logout|auth --backend replay|native|pi|codex|claude-code|copilot|opencode|gemini|goose --cwd <path> [task]")
+    throw new Error("usage: runrail run|serve|control|console|sessions|export|doctor|eval|sdk|benchmark|mcp|providers|harnesses|compatibility|login|logout|auth --backend replay|native|pi|codex|claude-code|copilot|opencode|gemini|goose --cwd <path> [task]")
   let cwd: string | undefined
   let backend: RunrailBackendName = "native"
   const requiredCapabilities: string[] = []
@@ -1288,6 +1296,59 @@ function parseServiceCliArgs(argv: readonly string[]): CliOptions {
 const SESSIONS_USAGE = "usage: runrail sessions [--cwd <path>] [--limit <n>] [--json]"
 const EXPORT_USAGE = "usage: runrail export <session id> [--format json|markdown] [--out <file>]"
 const DOCTOR_USAGE = "usage: runrail doctor [--cwd <path>] [--json]"
+const EVAL_USAGE = "usage: runrail eval list [--cwd <path>] [--json]\n       runrail eval run --suite <name> --setup <id> [--setup <id>]... [--case <id>]... [--repeats 1-5] [--parallel 1-4] [--max-minutes 1-1440] [--harness-auth subscription|environment] [--harness-credential-env NAME]... [--cwd <path>] [--json]"
+
+function parseEvalCliArgs(argv: readonly string[]): CliOptions {
+  const action = argv[0]
+  if (action !== "list" && action !== "run") throw new Error(EVAL_USAGE)
+  let cwd: string | undefined
+  let json = false
+  let suite: string | undefined
+  const setupIds: string[] = []
+  const cases: string[] = []
+  let repeats: number | undefined
+  let parallel: number | undefined
+  let maxMinutes: number | undefined
+  let harnessAuthMode: "subscription" | "environment" | undefined
+  const credentialEnvironment: string[] = []
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index]
+    const next = argv[index + 1]
+    if (arg === "--json") {
+      json = true
+      continue
+    }
+    if (next === undefined) throw new Error(EVAL_USAGE)
+    index += 1
+    if (arg === "--cwd") cwd = resolve(boundedText(next, "cwd", 4_096))
+    else if (action === "run" && arg === "--suite") suite = boundedText(next, "suite", 64)
+    else if (action === "run" && arg === "--setup" && setupIds.length < 8 && !setupIds.includes(next)) setupIds.push(boundedText(next, "setup", 64))
+    else if (action === "run" && arg === "--case" && cases.length < 200) cases.push(boundedText(next, "case", 128))
+    else if (action === "run" && arg === "--repeats") repeats = parseBoundedInteger(next, "repeats", 1, 5)
+    else if (action === "run" && arg === "--parallel") parallel = parseBoundedInteger(next, "parallel", 1, 4)
+    else if (action === "run" && arg === "--max-minutes") maxMinutes = parseBoundedInteger(next, "max-minutes", 1, 1_440)
+    else if (action === "run" && arg === "--harness-auth" && (next === "subscription" || next === "environment")) harnessAuthMode = next
+    else if (action === "run" && arg === "--harness-credential-env" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(next) && credentialEnvironment.length < 16) credentialEnvironment.push(next)
+    else throw new Error(EVAL_USAGE)
+  }
+  if (action === "run" && (suite === undefined || setupIds.length === 0)) throw new Error(EVAL_USAGE)
+  if (harnessAuthMode === "environment" && credentialEnvironment.length === 0) throw new Error("--harness-auth environment needs --harness-credential-env")
+  const base = { command: "eval" as const, cwd: cwd ?? resolve("."), backend: "native" as const, maxSteps: DEFAULT_MAX_STEPS, maxRepairAttempts: 0, verify: "check" as const, json, task: "", piArgs: Object.freeze([]) }
+  if (action === "list") return { ...base, evalCli: { action } }
+  return {
+    ...base,
+    ...(harnessAuthMode === undefined ? {} : { harnessAuth: Object.freeze({ mode: harnessAuthMode, credentialEnvironment: Object.freeze([...credentialEnvironment]) }) }),
+    evalCli: {
+      action,
+      suite: suite as string,
+      setupIds: Object.freeze(setupIds),
+      ...(cases.length === 0 ? {} : { cases: Object.freeze(cases) }),
+      ...(repeats === undefined ? {} : { repeats }),
+      ...(parallel === undefined ? {} : { parallel }),
+      ...(maxMinutes === undefined ? {} : { maxMinutes }),
+    },
+  }
+}
 
 function parseSessionsCliArgs(argv: readonly string[]): CliOptions {
   let cwd: string | undefined
@@ -1341,6 +1402,112 @@ function parseDoctorCliArgs(argv: readonly string[]): CliOptions {
     } else throw new Error(DOCTOR_USAGE)
   }
   return { command: "doctor", cwd: cwd ?? resolve("."), backend: "native", maxSteps: DEFAULT_MAX_STEPS, maxRepairAttempts: 2, verify: "check", json, task: "", piArgs: Object.freeze([]), ...(cwd === undefined ? {} : { doctorCwd: cwd }) }
+}
+
+const EVAL_JOB_WORDS: Readonly<Record<EvalJobState, string>> = { queued: "waiting", running: "working", checking: "checking", passed: "passed", failed: "failed", skipped: "skipped", error: "could not run" }
+
+/** `runrail eval`: the app's suites and results folder, each case's turns run here. Exit 0 when the eval ran to its end. */
+async function runEvalCli(options: CliOptions, storage: CliAccountStorage): Promise<number> {
+  const asked = options.evalCli
+  if (asked === undefined) throw new Error(EVAL_USAGE)
+  const evalsDir = join(homedir(), ".runrail", "evals")
+  if (asked.action === "list") {
+    const root = await realpath(options.cwd)
+    const suites = await new SuiteStore(root).list()
+    const runs = await listEvalResults(root, evalsDir)
+    if (options.json) console.log(JSON.stringify({ suites: suites.suites, runs }, null, 2))
+    else {
+      if (suites.suites.length === 0) console.error("No eval suites in this project. Mine and save one in the app's Evals view.")
+      for (const suite of suites.suites) console.log(`suite\t${terminalText(suite.name)}\t${String(suite.cases)} case${suite.cases === 1 ? "" : "s"}\t${terminalText(suite.check)}`)
+      for (const run of runs.slice(0, 20)) console.log(`run\t${run.runId}\t${localMinute(run.startedAt)}\t${terminalText(run.suite)}\t${run.state}\t${String(run.jobs.filter((job) => job.state === "passed").length)}/${String(run.jobs.length)} passed`)
+    }
+    return 0
+  }
+  const controller = new AbortController()
+  const interrupt = (): void => controller.abort()
+  process.once("SIGINT", interrupt)
+  process.once("SIGTERM", interrupt)
+  const said = new Map<number, EvalJobState>()
+  try {
+    const status = await runHeadlessEval({
+      cwd: options.cwd,
+      suite: asked.suite,
+      setupIds: asked.setupIds,
+      ...(asked.cases === undefined ? {} : { cases: asked.cases }),
+      ...(asked.repeats === undefined ? {} : { repeats: asked.repeats }),
+      ...(asked.parallel === undefined ? {} : { parallel: asked.parallel }),
+      ...(asked.maxMinutes === undefined ? {} : { maxMinutes: asked.maxMinutes }),
+      setupsPath: join(homedir(), ".runrail", "setups.json"),
+      evalsDir,
+      open: (request, cwd) => openHeadlessRole(request, cwd, options, storage),
+      signal: controller.signal,
+      onProgress: (progress) => {
+        for (const job of progress.jobs) {
+          if (said.get(job.index) === job.state || job.state === "queued") continue
+          said.set(job.index, job.state)
+          console.error(`${terminalText(job.caseId)} · ${terminalText(job.setupId)} · run ${String(job.repeat)}: ${EVAL_JOB_WORDS[job.state]}${job.error === undefined ? "" : ` (${job.error})`}`)
+        }
+      },
+    })
+    if (options.json) console.log(JSON.stringify(status, null, 2))
+    else {
+      for (const setup of status.setups) {
+        const jobs = status.jobs.filter((job) => job.setupId === setup.id)
+        const scored = jobs.filter((job) => job.state === "passed" || job.state === "failed" || job.state === "error")
+        console.log(`${terminalText(setup.name)}\t${String(scored.filter((job) => job.state === "passed").length)}/${String(scored.length)} passed${scored.length < jobs.length ? ` of ${String(jobs.length)}` : ""}`)
+      }
+      console.error(`${status.runId}: ${status.state}${status.error === undefined ? "" : ` (${status.error.message})`}. The app's Evals view lists it.`)
+    }
+    return status.state === "succeeded" ? 0 : 1
+  } finally {
+    process.off("SIGINT", interrupt)
+    process.off("SIGTERM", interrupt)
+  }
+}
+
+/** Earlier eval runs of this project from the app's results folder; nothing runs. */
+async function listEvalResults(root: string, evalsDir: string): Promise<readonly EvalRunStatus[]> {
+  const setupRuns = new SetupRuns({ check: () => Promise.reject(new Error("nothing runs while listing")) })
+  const runs = new EvalRuns({ root, dir: join(evalsDir, createHash("sha256").update(root).digest("hex").slice(0, 16)), setupRuns, check: () => Promise.reject(new Error("nothing runs while listing")) })
+  return runs.list()
+}
+
+const SETUP_ACCESS_MODES: Readonly<Record<SetupAccess, HarnessPermissionMode>> = { ask: "ask", "auto-edit": "accept-edits", auto: "auto", full: "bypass" }
+
+/**
+ * A setup role's thread for a headless run, on the role's route, model, effort, and access. A
+ * planner or reviewer runs read only. Runrail's own loop needs the role's connection and model;
+ * a coding tool uses its own sign-in, or the tool connection the role names.
+ */
+async function openHeadlessRole(request: SetupTurnRequest, cwd: string, options: CliOptions, storage: CliAccountStorage): Promise<RunrailSession> {
+  const role = request.runsOn
+  const plan = request.mode === "plan"
+  const thinking = role.effort !== undefined && isThinkingLevel(role.effort) ? role.effort : undefined
+  const selection: ModelSelection | undefined = role.model === undefined && thinking === undefined ? undefined : { ...(role.model === undefined ? {} : { id: role.model }), ...(thinking === undefined ? {} : { thinking }) }
+  const base = {
+    cwd,
+    backend: role.route,
+    maxSteps: DEFAULT_MAX_STEPS,
+    maxRepairAttempts: 0,
+    verifyAfterTurn: false,
+    metrics: new RunrailMetrics(),
+    ...(options.harnessAuth === undefined ? {} : { harnessAuth: options.harnessAuth }),
+  }
+  if (role.route === "native") {
+    if (role.connectionId === undefined || role.model === undefined) throw new Error(`the ${request.role} runs on Runrail's own loop, which needs a connection and a model in the setup`)
+    const provider = await resolveCliConnection({ id: role.connectionId, model: role.model, ...(thinking === undefined ? {} : { thinking }) }, storage)
+    // Full access approves its own changes; anything less is declined, as no one is there to ask.
+    return createRunrailSession({ ...base, provider, ...(selection === undefined ? {} : { modelSelection: selection }), approval: { request: () => !plan && request.access === "full" } })
+  }
+  if (role.route === "pi" || role.route === "replay") return createRunrailSession({ ...base, ...(selection === undefined ? {} : { modelSelection: selection }) })
+  const connected = role.connectionId === undefined ? undefined : await applyToolConnection({ ...options, backend: role.route, toolConnection: role.connectionId, ...(selection === undefined ? {} : { modelSelection: selection }) }, storage)
+  const model = role.model ?? connected?.modelSelection?.id
+  const effort = effortFromThinking(role.effort)
+  return createRunrailSession({
+    ...base,
+    ...(connected?.harnessAccount === undefined ? {} : { harnessAccount: connected.harnessAccount }),
+    harnessLaunch: { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }), permissionMode: plan ? "plan" : SETUP_ACCESS_MODES[request.access] },
+  })
 }
 
 async function runSessionsCli(options: CliOptions): Promise<void> {
@@ -2107,7 +2274,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
     const plan: CliSessionPlan = await prepareCliSession(argv)
     const parsed = parseCliArgs(plan.argv)
     // One vault object per process: a connection named on the command line and the control server read the same store.
-    const accountStorage = parsed.connection !== undefined || parsed.toolConnection !== undefined || parsed.command === "control" || parsed.command === "login" || parsed.command === "logout" || parsed.command === "auth" ? createCliAccountStorage(parsed) : undefined
+    const accountStorage = parsed.connection !== undefined || parsed.toolConnection !== undefined || parsed.command === "control" || parsed.command === "login" || parsed.command === "logout" || parsed.command === "auth" || parsed.command === "eval" ? createCliAccountStorage(parsed) : undefined
     const connected: CliOptions = parsed.connection === undefined || accountStorage === undefined ? parsed : { ...parsed, provider: await resolveCliConnection(parsed.connection, accountStorage) }
     const options: CliOptions = connected.toolConnection === undefined || accountStorage === undefined ? connected : await applyToolConnection(connected, accountStorage)
     if (options.command === "pi") {
@@ -2169,6 +2336,8 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
       await runPluginCli(options)
     } else if (options.command === "sessions") {
       await runSessionsCli(options)
+    } else if (options.command === "eval") {
+      process.exitCode = await runEvalCli(options, accountStorage ?? createCliAccountStorage(options))
     } else if (options.command === "export") {
       await runExportCli(options)
     } else if (options.command === "doctor") {
@@ -2287,6 +2456,7 @@ export async function runCliMain(argv: readonly string[] = process.argv.slice(2)
           ...(options.authToken === undefined ? {} : { authToken: options.authToken }),
           ...(options.browserTools === true ? { browserTools: { anySite: options.browserAnySite === true, mcpCommand: browserMcpCommand() } } : {}),
           connectorsFile: join(homedir(), ".runrail", "connectors.json"),
+          setupRunsDir: join(homedir(), ".runrail", "setup-runs"),
           connectorTools: { mcpCommand: browserMcpCommand() },
           ...(options.threadTools === true ? { threadTools: { mcpCommand: browserMcpCommand() } } : {}),
           ...(options.computerTools === true ? { computerTools: { mcpCommand: browserMcpCommand() } } : {}),

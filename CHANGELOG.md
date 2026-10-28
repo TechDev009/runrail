@@ -31,6 +31,18 @@ All notable changes to Runrail will be documented here.
   `auth.mcp.client.set` names its app ID and callback port, and its secret goes
   only through `POST /secret` (`mcpClientId`) into the credential vault. Such
   a server with no app named reports `AUTH_CLIENT_REQUIRED`.
+- Setup runs pick up where they stopped. An engine started with a setup-runs
+  folder saves each run a person started as it goes, and Desktop asks the
+  project's engine to take it back after a restart: done steps stay done, the
+  step that was mid-turn is marked interrupted, and the next turn is told to
+  check where things stand (`setup.run.saved`, `setup.run.restore`).
+- A setup's budget can cap tokens (`budget.maxTokens`). Each answered turn
+  reports its thread's input and output so far, and a run's status and each
+  eval case show the total.
+- `runrail eval run` runs a saved eval suite with no desktop, each case's
+  turns in this process on the role's own route, model, and access, into the
+  same results Desktop lists; `runrail eval list` shows them. Up to four evals
+  now run at once in a project (was one).
 
 ### Fixes
 

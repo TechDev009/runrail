@@ -82,7 +82,10 @@ test("evals: mine, validate, save a suite, run a setup against it, score it with
 
   const started = (await rpc("eval.run", { suite: "smoke", setupIds: ["solo"], maxMinutes: 5 })).body.result
   expect(started).toMatchObject({ suite: "smoke", state: "running", cases: [item.id] })
-  expect(await rpc("eval.run", { suite: "smoke", setupIds: ["solo"] })).toMatchObject({ status: 429, body: { error: { code: "CONTROL_EVAL_LIMIT" } } })
+  // Another eval may run beside it; this one is stopped before its case starts.
+  const beside = (await rpc("eval.run", { suite: "smoke", setupIds: ["solo"] })).body.result
+  expect(beside).toMatchObject({ state: "running" })
+  expect((await rpc("eval.stop", { runId: beside.runId })).body.result.error).toMatchObject({ code: "EVAL_STOPPED" })
 
   // Play the desktop: the turn names the eval's worktree, which has no tests in it.
   let waiting: any
@@ -104,7 +107,7 @@ test("evals: mine, validate, save a suite, run a setup against it, score it with
   }
   expect(status.state).toBe("succeeded")
   expect(status.jobs).toMatchObject([{ caseId: item.id, setupId: "solo", state: "passed", setupState: "succeeded", check: { exitCode: 0 } }])
-  expect((await rpc("eval.list")).body.result.runs.map((run: any) => run.runId)).toEqual([started.runId])
+  expect((await rpc("eval.list")).body.result.runs.map((run: any) => run.runId).sort()).toEqual([started.runId, beside.runId].sort())
   const [project] = await readdir(join(home, "evals"))
   const kept = await readFile(join(home, "evals", project ?? "", started.runId, "results.jsonl"), "utf8")
   expect(kept).not.toContain("Make a two")

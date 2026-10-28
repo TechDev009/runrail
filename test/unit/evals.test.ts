@@ -8,7 +8,9 @@ import { EvalRuns } from "../../src/evals/run.ts"
 import { EvalError, parseSuite, SuiteStore } from "../../src/evals/suite.ts"
 import { runGit } from "../../src/git/run.ts"
 import { ThreadWorktrees } from "../../src/git/worktrees.ts"
-import { SetupRuns } from "../../src/setups/runner.ts"
+import { runHeadlessEval } from "../../src/evals/headless.ts"
+import type { RunrailSession } from "../../src/session.ts"
+import { SetupRuns, type SetupTurnRequest } from "../../src/setups/runner.ts"
 import { parseSetup } from "../../src/setups/schema.ts"
 
 const cleanup: string[] = []
@@ -230,10 +232,13 @@ test("an eval runs unattended: its plan is not held for approval and its executo
   }
 })
 
-test("an eval stops at its minutes budget and skips what is left; one eval at a time", async () => {
+test("an eval stops at its minutes budget and skips what is left; four evals at a time", async () => {
   const h = await evalHarness()
   const started = h.evals.start({ suite: { name: "s", check: CHECK, cases: [h.item] }, setups: [executorOnly], repeats: 3, parallel: 1, maxMinutes: 0.01 })
-  expect(() => h.evals.start({ suite: { name: "s", check: CHECK, cases: [h.item] }, setups: [executorOnly], repeats: 1, parallel: 1, maxMinutes: 5 })).toThrow("already running")
+  const others = [1, 2, 3].map(() => h.evals.start({ suite: { name: "s", check: CHECK, cases: [h.item] }, setups: [executorOnly], repeats: 1, parallel: 1, maxMinutes: 5 }).runId)
+  expect(() => h.evals.start({ suite: { name: "s", check: CHECK, cases: [h.item] }, setups: [executorOnly], repeats: 1, parallel: 1, maxMinutes: 5 })).toThrow("4 evals are already running")
+  for (const runId of others) await h.evals.stop(runId)
+  for (const runId of others) expect((await finished(h.evals, runId)).state).toBe("stopped")
   const done = await finished(h.evals, started.runId)
   expect(done.state).toBe("stopped")
   expect(done.error?.code).toBe("EVAL_BUDGET")
@@ -312,4 +317,41 @@ test("saved runs are listed only when their run.json has the shape of one", asyn
   await writeFile(join(dir, bad, "run.json"), JSON.stringify({ runId: bad, suite: "s", state: "succeeded", startedAt: "yesterday", jobs: [] }))
   const evals = new EvalRuns({ root: home, dir, setupRuns: new SetupRuns({ check: async () => Promise.reject(new Error("unused")) }), check: () => Promise.reject(new Error("unused")) })
   expect((await evals.list()).map((run) => [run.runId, run.state])).toEqual([[good, "stopped"]])
+})
+
+test("a headless eval runs each case's roles in this process, read only or at Full access, and keeps its results where the app reads them", async () => {
+  const { root } = await repository()
+  const home = await scratch()
+  const [, item] = await mineCandidates({ root, limit: 10 })
+  await new SuiteStore(root).save(parseSuite({ name: "smoke", check: CHECK, cases: [item] }, "smoke"))
+  const setupsPath = join(home, "setups.json")
+  const duo = { id: "duo", name: "Duo", roles: { planner: { route: "claude-code", model: "fixture-small" }, executor: { route: "codex", access: "auto-edit", effort: "high" } }, rules: { approvePlan: true, reviewRounds: 0 } }
+  await writeFile(setupsPath, JSON.stringify({ version: 1, setups: [duo] }))
+  const opened: string[] = []
+  const stopped: string[] = []
+  const open = async (request: SetupTurnRequest, cwd: string) => {
+    opened.push(`${request.role}:${request.mode}:${request.access}:${request.runsOn.route}:${cwd === request.worktree?.cwd ? "worktree" : cwd}`)
+    let used = 0
+    return {
+      metrics: { snapshot: () => ({ inputTokens: used, outputTokens: 100 }) },
+      async *prompt(text: string) {
+        used += 1_000
+        if (request.role === "executor") await writeFile(join(cwd, "src/a.js"), "export const a = 2 // fixed\n")
+        yield { type: "assistant.message", turnId: "t", text: request.role === "planner" ? `Plan for: ${text.split("\n")[2] ?? ""}\n\n\`\`\`json\n${JSON.stringify({ steps: [{ title: "Make a two" }] })}\n\`\`\`` : "Done." }
+      },
+      resolveApproval: () => true,
+      stop: async () => void stopped.push(request.role),
+    } as unknown as RunrailSession
+  }
+  const progress: string[] = []
+  const status = await runHeadlessEval({ cwd: root, suite: "smoke", setupIds: ["duo"], setupsPath, evalsDir: join(home, "evals"), open, pollMs: 10, onProgress: (run) => progress.push(run.jobs.map((job) => job.state).join(",")) })
+  expect(status).toMatchObject({ state: "succeeded", suite: "smoke", setups: [{ id: "duo", name: "Duo" }] })
+  // No one approves the plan, and the executor works at Full access in its throwaway checkout.
+  expect(opened).toEqual(["planner:plan:ask:claude-code:worktree", "executor:agent:full:codex:worktree"])
+  expect(status.jobs).toMatchObject([{ state: "passed", setupState: "succeeded", turns: 2, tokens: 2_200 }])
+  expect(stopped.sort()).toEqual(["executor", "planner"])
+  expect(progress.at(-1)).toBe("passed")
+  const [project] = await readdir(join(home, "evals"))
+  expect(await readFile(join(home, "evals", project ?? "", status.runId, "results.jsonl"), "utf8")).toContain('"state":"passed"')
+  await expect(runHeadlessEval({ cwd: root, suite: "smoke", setupIds: ["missing"], setupsPath, evalsDir: join(home, "evals"), open })).rejects.toMatchObject({ code: "SETUP_NOT_FOUND" })
 })

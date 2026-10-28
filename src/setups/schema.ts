@@ -31,10 +31,12 @@ export interface SetupRules {
   readonly budget: SetupBudget
 }
 
-/** The run stops when either is reached. */
+/** The run stops when any of these is reached. */
 export interface SetupBudget {
   readonly maxTurns: number
   readonly maxMinutes: number
+  /** Input and output tokens across the run's threads, as each route reports them. */
+  readonly maxTokens?: number
 }
 
 export interface Setup {
@@ -59,6 +61,7 @@ export const SETUP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 export const MAX_SETUPS = 64
 export const MAX_REVIEW_ROUNDS = 5
 export const DEFAULT_BUDGET: SetupBudget = Object.freeze({ maxTurns: 40, maxMinutes: 120 })
+export const MAX_BUDGET_TOKENS = 1_000_000_000
 const MODEL = /^[^\0\r\n]{1,200}$/
 const CONNECTION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
@@ -123,7 +126,11 @@ export function parseSetup(value: unknown): Setup {
       approvePlan: rules.approvePlan === undefined ? roles.planner !== undefined : rules.approvePlan === true,
       reviewRounds,
       ...(check === undefined ? {} : { check }),
-      budget: Object.freeze({ maxTurns: whole(budget.maxTurns, 1, 500, "setup.rules.budget.maxTurns", DEFAULT_BUDGET.maxTurns), maxMinutes: whole(budget.maxMinutes, 1, 24 * 60, "setup.rules.budget.maxMinutes", DEFAULT_BUDGET.maxMinutes) }),
+      budget: Object.freeze({
+        maxTurns: whole(budget.maxTurns, 1, 500, "setup.rules.budget.maxTurns", DEFAULT_BUDGET.maxTurns),
+        maxMinutes: whole(budget.maxMinutes, 1, 24 * 60, "setup.rules.budget.maxMinutes", DEFAULT_BUDGET.maxMinutes),
+        ...(budget.maxTokens === undefined ? {} : { maxTokens: whole(budget.maxTokens, 1_000, MAX_BUDGET_TOKENS, "setup.rules.budget.maxTokens", 0) }),
+      }),
     }),
   })
 }

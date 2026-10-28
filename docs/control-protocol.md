@@ -313,8 +313,8 @@ Important control method families include:
   when `worktrees` is available
 - `check.run` and `check.stop` when `checks` is available
 - `setup.list`, `setup.save`, `setup.delete`, `setup.trust`, `setup.run.start`,
-  `setup.run.status`, `setup.run.list`, `setup.run.answer`, and
-  `setup.run.stop` when `setups` is available
+  `setup.run.status`, `setup.run.list`, `setup.run.answer`, `setup.run.stop`,
+  `setup.run.restore`, and `setup.run.saved` when `setups` is available
 - `eval.mine`, `eval.validate`, `eval.suites`, `eval.suite.get`,
   `eval.suite.save`, `eval.run`, `eval.status`, `eval.list`, and `eval.stop`
   when `evals` is available

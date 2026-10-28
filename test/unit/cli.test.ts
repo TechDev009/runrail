@@ -252,3 +252,14 @@ describe("CLI parsing", () => {
     for (const args of refused) expect(() => parseCliArgs(args)).toThrow()
   })
 })
+
+test("eval: list, and run a suite against setups with no desktop", () => {
+  expect(parseCliArgs(["eval", "list", "--cwd", "/tmp", "--json"])).toMatchObject({ command: "eval", cwd: "/tmp", json: true, evalCli: { action: "list" } })
+  expect(parseCliArgs(["eval", "run", "--suite", "smoke", "--setup", "duo", "--setup", "solo", "--case", "abc", "--repeats", "2", "--parallel", "3", "--max-minutes", "30", "--harness-auth", "environment", "--harness-credential-env", "ANTHROPIC_API_KEY"])).toMatchObject({
+    command: "eval",
+    harnessAuth: { mode: "environment", credentialEnvironment: ["ANTHROPIC_API_KEY"] },
+    evalCli: { action: "run", suite: "smoke", setupIds: ["duo", "solo"], cases: ["abc"], repeats: 2, parallel: 3, maxMinutes: 30 },
+  })
+  for (const argv of [["eval"], ["eval", "run", "--suite", "smoke"], ["eval", "run", "--setup", "duo"], ["eval", "run", "--suite", "s", "--setup", "d", "--parallel", "9"], ["eval", "list", "--suite", "s"], ["eval", "run", "--suite", "s", "--setup", "d", "--harness-auth", "environment"]])
+    expect(() => parseCliArgs(argv)).toThrow()
+})

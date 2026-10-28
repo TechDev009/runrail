@@ -4,7 +4,7 @@ import { appendFile, lstat, mkdir, readdir, readFile, realpath, rm, writeFile } 
 import { dirname, join, relative, sep } from "node:path"
 import type { CheckCounts, CheckResult } from "../check/run.ts"
 import { runGit, type GitRunOptions, type GitRunResult } from "../git/run.ts"
-import type { SetupRuns, SetupWorktree } from "../setups/runner.ts"
+import type { SetupRuns, SetupTurnPort, SetupWorktree } from "../setups/runner.ts"
 import { SetupError, type Setup } from "../setups/schema.ts"
 import { checkFor, linkDependencies, type EvalCase } from "./mine.ts"
 import { EvalError, type EvalSuite } from "./suite.ts"
@@ -27,6 +27,7 @@ export interface EvalJob {
   setupState?: string
   worktree?: string
   turns?: number
+  tokens?: number
   durationMs?: number
   check?: { readonly exitCode?: number; readonly timedOut: boolean; readonly counts?: CheckCounts }
   error?: string
@@ -50,6 +51,8 @@ export interface EvalRunsOptions {
   /** Results go to `<dir>/<run id>/`; one directory per project. */
   readonly dir: string
   readonly setupRuns: SetupRuns
+  /** Who runs each case's turns: the desktop through `pending` unless a port is given (a headless eval). */
+  readonly port?: SetupTurnPort
   readonly check: (input: { readonly id: string; readonly cwd: string; readonly command: string }) => Promise<CheckResult>
   readonly stopCheck?: (id: string) => Promise<unknown>
   readonly git?: (options: GitRunOptions) => Promise<GitRunResult>
@@ -67,6 +70,8 @@ export interface EvalStart {
 
 const MAX_JOBS = 400
 const MAX_TASK = 8_000
+/** Evals going at once in one project; their case runs share the project's setup run slots. */
+export const MAX_RUNNING_EVALS = 4
 
 class EvalStopped extends Error {}
 
@@ -103,7 +108,7 @@ export class EvalRuns {
   }
 
   start(input: EvalStart): EvalRunStatus {
-    if ([...this.#runs.values()].some((run) => run.status.state === "running")) throw new EvalError("EVAL_LIMIT", "an eval is already running in this project; stop it first")
+    if ([...this.#runs.values()].filter((run) => run.status.state === "running").length >= MAX_RUNNING_EVALS) throw new EvalError("EVAL_LIMIT", `${String(MAX_RUNNING_EVALS)} evals are already running in this project; stop one first`)
     const total = input.suite.cases.length * input.setups.length * input.repeats
     if (total === 0 || total > MAX_JOBS) throw new EvalError("EVAL_LIMIT", `an eval runs 1 to ${String(MAX_JOBS)} case runs; this one would run ${String(total)}`)
     const runId = `eval-${randomUUID()}`
@@ -216,6 +221,7 @@ export class EvalRuns {
       run.setupRunIds.delete(started_.runId)
       job.setupState = ended.state
       job.turns = ended.turns
+      if (ended.tokens !== undefined) job.tokens = ended.tokens
       if (ended.state === "stopped" && run.controller.signal.aborted) {
         job.state = "skipped"
         return
@@ -269,7 +275,7 @@ export class EvalRuns {
     for (;;) {
       if (run.controller.signal.aborted) throw new EvalStopped()
       try {
-        return this.options.setupRuns.start(unattended(setup), task, this.options.setupRuns.pending, { worktree })
+        return this.options.setupRuns.start(unattended(setup), task, this.options.port ?? this.options.setupRuns.pending, { worktree })
       } catch (error) {
         if (!(error instanceof SetupError) || error.code !== "SETUP_LIMIT") throw error
       }
@@ -331,6 +337,7 @@ function resultLine(job: EvalJob): Record<string, unknown> {
     ...(job.setupRunId === undefined ? {} : { setupRun: job.setupRunId }),
     ...(job.setupState === undefined ? {} : { setupState: job.setupState }),
     ...(job.turns === undefined ? {} : { turns: job.turns }),
+    ...(job.tokens === undefined ? {} : { tokens: job.tokens }),
     ...(job.durationMs === undefined ? {} : { durationMs: job.durationMs }),
     ...(job.check === undefined ? {} : { check: job.check }),
   }

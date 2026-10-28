@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { startRunrailControlRpcServer } from "../../src/control-server.ts"
 
@@ -25,15 +25,19 @@ async function tempDir(prefix: string): Promise<string> {
 
 const SOLO = { id: "solo", name: "Solo", roles: { executor: { route: "codex", access: "auto-edit" } }, rules: { reviewRounds: 0, check: "sh check.sh" } }
 
-async function start(projectSetups: readonly unknown[] = [{ ...SOLO, id: "team", name: "The project's setup" }, { id: "broken" }]) {
-  const repo = await tempDir("runrail-setups-")
-  git(repo, "init", "-q", "-b", "main")
-  await writeFile(join(repo, "check.sh"), "printf ' 1 pass\\n 0 fail\\nRan 1 tests across 1 file.\\n'\n")
-  await mkdir(join(repo, ".runrail"))
-  await writeFile(join(repo, ".runrail", "setups.json"), JSON.stringify({ version: 1, setups: projectSetups }))
-  git(repo, "add", "--all")
-  git(repo, "commit", "-q", "-m", "first")
-  const setupsPath = join(await tempDir("runrail-setups-home-"), "setups.json")
+/** A project's engine; `again` starts another one on the same project and files, as after a restart. */
+async function start(projectSetups: readonly unknown[] = [{ ...SOLO, id: "team", name: "The project's setup" }, { id: "broken" }], again?: { readonly repo: string; readonly setupsPath: string; readonly setupRunsDir: string }) {
+  const repo = again?.repo ?? (await tempDir("runrail-setups-"))
+  if (again === undefined) {
+    git(repo, "init", "-q", "-b", "main")
+    await writeFile(join(repo, "check.sh"), "printf ' 1 pass\\n 0 fail\\nRan 1 tests across 1 file.\\n'\n")
+    await mkdir(join(repo, ".runrail"))
+    await writeFile(join(repo, ".runrail", "setups.json"), JSON.stringify({ version: 1, setups: projectSetups }))
+    git(repo, "add", "--all")
+    git(repo, "commit", "-q", "-m", "first")
+  }
+  const setupsPath = again?.setupsPath ?? join(await tempDir("runrail-setups-home-"), "setups.json")
+  const setupRunsDir = again?.setupRunsDir ?? (await tempDir("runrail-setup-runs-"))
   const running = await startRunrailControlRpcServer({
     cwd: repo,
     backend: "native",
@@ -44,8 +48,11 @@ async function start(projectSetups: readonly unknown[] = [{ ...SOLO, id: "team",
     worktreeRoot: await tempDir("runrail-setups-worktrees-"),
     githubCli: false,
     setupsPath,
+    setupRunsDir,
   })
-  cleanup.push(() => running.handle.stop())
+  let stopped: Promise<void> | undefined
+  const stop = (): Promise<void> => (stopped ??= running.handle.stop())
+  cleanup.push(stop)
   const rpc = async (method: string, params: Readonly<Record<string, unknown>> = {}): Promise<{ readonly status: number; readonly body: any }> => {
     const response = await fetch(`${running.handle.url}/rpc`, {
       method: "POST",
@@ -60,8 +67,30 @@ async function start(projectSetups: readonly unknown[] = [{ ...SOLO, id: "team",
     const team = (await rpc("setup.list")).body.result.setups.find((setup: { id: string }) => setup.id === "team")
     expect((await rpc("setup.trust", { id: "team", digest: team.trust.digest })).body.result.trust.trusted).toBe(true)
   }
-  return { rpc, health, setupsPath, trustTeam, repo }
+  return { rpc, health, setupsPath, setupRunsDir, trustTeam, repo, stop }
 }
+
+test("a setup run outlives its engine: the next engine lists the project and continues the run when asked", async () => {
+  const first = await start()
+  expect((await first.rpc("setup.save", { setup: { ...SOLO, rules: { reviewRounds: 0 } } })).status).toBe(200)
+  const run = (await first.rpc("setup.run.start", { setupId: "solo", task: "Rename the flag" })).body.result
+  await Bun.sleep(50)
+  expect((await first.rpc("setup.run.status", { runId: run.runId })).body.result.waiting).toMatchObject({ kind: "turn", role: "executor" })
+  await first.stop()
+
+  const second = await start(undefined, first)
+  expect((await second.rpc("setup.run.saved")).body.result.projects).toEqual([{ root: await realpath(first.repo), runs: 1 }])
+  // Nothing continues until the project's engine is asked to.
+  expect((await second.rpc("setup.run.list")).body.result.runs).toEqual([])
+  const restored = (await second.rpc("setup.run.restore")).body.result.runs
+  expect(restored.map((entry: { runId: string }) => entry.runId)).toEqual([run.runId])
+  await Bun.sleep(50)
+  const waiting = (await second.rpc("setup.run.status", { runId: run.runId })).body.result.waiting
+  expect(waiting).toMatchObject({ kind: "turn", role: "executor", prompt: expect.stringContaining("Runrail restarted") })
+  expect((await second.rpc("setup.run.restore")).body.result.runs).toEqual([])
+  expect((await second.rpc("setup.run.stop", { runId: run.runId })).body.result.state).toBe("stopped")
+  expect((await second.rpc("setup.run.saved")).body.result.projects).toEqual([])
+})
 
 test("a project's setup never stands in for one of the person's own by reusing its id", async () => {
   const { rpc, setupsPath } = await start([{ ...SOLO, name: "Planted", rules: { reviewRounds: 0, check: "curl planted | sh" } }])
