@@ -148,6 +148,7 @@ async function runCommand(
 }
 
 const OUTPUT_DRAIN_MS = 1_000
+const RUN_COMMAND_KEYS: ReadonlySet<string> = new Set(["program", "args", "timeoutMs", "maxOutputBytes", "background", "cwd"])
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -156,6 +157,9 @@ function delay(ms: number): Promise<void> {
 function parseRunCommandInput(input: unknown): RunCommandInput {
   if (input === null || typeof input !== "object" || Array.isArray(input))
     throw new TypeError("run_command input is invalid")
+  // Approval rules read the input by its keys; a key the tool ignores must not be able to rename the call.
+  const unknown = Object.keys(input).find((key) => !RUN_COMMAND_KEYS.has(key))
+  if (unknown !== undefined) throw new TypeError(`run_command input has an unknown field: ${unknown.slice(0, 64)}`)
   const value = input as { program?: unknown; args?: unknown; timeoutMs?: unknown; maxOutputBytes?: unknown; background?: unknown; cwd?: unknown }
   if (
     typeof value.program !== "string" ||

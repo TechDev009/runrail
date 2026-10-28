@@ -30,6 +30,8 @@ export type McpConnect = (options: McpStdioClientOptions) => Promise<Pick<McpCli
 export type McpConnectHttp = (options: McpHttpClientOptions) => Promise<Pick<McpClient, "listTools" | "callTool" | "close" | "server">>
 
 const CONNECT_TIMEOUT_MS = 20_000
+// A tool call is a build or a browser run, not a handshake; this is the longest the client allows.
+const CALL_TIMEOUT_MS = 120_000
 
 export const NO_CONFIGURED_MCP: ConfiguredMcp = Object.freeze({ tools: Object.freeze([]), status: Object.freeze([]), close: async () => undefined })
 
@@ -58,11 +60,12 @@ export async function connectConfiguredMcp(
           url,
           allowRemote: true,
           timeoutMs: CONNECT_TIMEOUT_MS,
+          callTimeoutMs: CALL_TIMEOUT_MS,
           ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }),
           ...(signedIn ? { authorization: (signal: AbortSignal) => signIns!.token(url, signal) } : {}),
         })
       } else {
-        client = await connect({ command: server.command, args: server.args, cwd, inherit: server.env, timeoutMs: CONNECT_TIMEOUT_MS })
+        client = await connect({ command: server.command, args: server.args, cwd, inherit: server.env, timeoutMs: CONNECT_TIMEOUT_MS, callTimeoutMs: CALL_TIMEOUT_MS })
       }
       // The configured name, not the one the server reports, so two servers can never claim one name.
       const tools = await createMcpNativeTools(client as McpClient, { namespace: server.name, ...(server.readOnlyTools === undefined ? {} : { readOnlyTools: server.readOnlyTools }) })

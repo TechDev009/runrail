@@ -210,8 +210,8 @@ export class MemorySources {
     if (source.lastModified !== undefined) headers["if-modified-since"] = source.lastModified
     let response: Response
     try {
-      // A public feed never redirects the engine to an address on this machine or its network.
-      response = await fetchCheckingRedirects(source.target, { headers, signal: AbortSignal.timeout(20_000) }, (next, from) => isPrivateHost(from.hostname) || !isPrivateHost(next.hostname), { maxHops: 5, ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }) })
+      // A public feed never redirects the engine to an address on this machine or its network, nor a private one out of it.
+      response = await fetchCheckingRedirects(source.target, { headers, signal: AbortSignal.timeout(20_000) }, (next, from) => isPrivateHost(from.hostname) === isPrivateHost(next.hostname), { maxHops: 5, ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }) })
     } catch {
       throw new MemoryError("MEMORY_SOURCE_FAILED", "the feed did not answer")
     }

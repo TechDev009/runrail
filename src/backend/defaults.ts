@@ -227,7 +227,7 @@ function createCommandBackend(
     ? undefined
     : defaultCommand === "codex"
       ? ["exec", "--json"]
-      : ["--print", "--output-format", "stream-json", "--verbose"])
+      : ["--print", "--output-format", "stream-json", "--verbose", "--setting-sources", "user"])
   const options = { command, ...(args === undefined ? {} : { args }), promptMode: customCommand ? "jsonl" as const : "argument" as const, auth, name, capabilities: externalCapabilities, eventMapper, ...liveSink(context), ...metadataSink(context) }
   return context.options.harnessPersistent === true ? new PersistentCommandAgentBackend(options) : new CommandAgentBackend(options)
 }

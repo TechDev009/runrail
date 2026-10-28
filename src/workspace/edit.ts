@@ -30,9 +30,13 @@ export async function saveOverRead(policy: WorkspacePolicy, path: string, conten
   if (bytes > DEFAULT_MAX_FILE_BYTES) throw new RangeError("workspace write exceeds byte limit")
   // Checks the path the way an agent's write would: inside the workspace, no symlink out, not a control or credential file.
   const target = await policy.resolveForWrite(path)
-  const current = await policy.read(path, DEFAULT_MAX_FILE_BYTES)
+  await policy.read(path, DEFAULT_MAX_FILE_BYTES)
+  // The bytes that are checked, hashed and replaced are one read, so a change in between cannot pass the hash.
+  const raw = await readFile(target)
+  if (raw.length > DEFAULT_MAX_FILE_BYTES) throw new RangeError("workspace read exceeds byte limit")
+  const current = raw.toString("utf8")
   // Text that does not survive decoding would lose its bytes on save.
-  if (!Buffer.from(current, "utf8").equals(await readFile(target))) throw new WorkspaceEditError("WORKSPACE_EDIT_NOT_TEXT", "the file is not UTF-8 text")
+  if (!Buffer.from(current, "utf8").equals(raw)) throw new WorkspaceEditError("WORKSPACE_EDIT_NOT_TEXT", "the file is not UTF-8 text")
   if (textHash(current) !== baseHash) throw new WorkspaceEditError("WORKSPACE_EDIT_CONFLICT", "the file changed since it was opened")
   const mode = (await lstat(target)).mode & 0o7777
   // Beside the file, then over it, so a reader never sees half of it.

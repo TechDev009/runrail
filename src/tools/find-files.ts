@@ -1,5 +1,5 @@
 import type { NativeTool } from "@nifrajs/coding-agent"
-import type { WorkspacePolicy } from "../workspace/policy.ts"
+import type { WorkspacePolicy, WorkspaceReport } from "../workspace/policy.ts"
 
 export function createFindFilesTool(policy: WorkspacePolicy): NativeTool {
   return {
@@ -8,7 +8,9 @@ export function createFindFilesTool(policy: WorkspacePolicy): NativeTool {
     capabilities: ["filesystem.read"],
     execute: async (input) => {
       const value = parseFindInput(input)
-      return { entries: await policy.find(value.path, value.pattern, value.depth, value.maxEntries) }
+      const report: WorkspaceReport = { truncated: false, skipped: 0 }
+      const entries = await policy.find(value.path, value.pattern, value.depth, value.maxEntries, report)
+      return { entries, ...(report.truncated ? { truncated: true } : {}) }
     },
   }
 }

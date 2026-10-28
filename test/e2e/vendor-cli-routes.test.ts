@@ -90,7 +90,7 @@ describe("installed coding tool routes through the CLI", () => {
     expect(first.raw).not.toContain("say hi")
     expect(first.raw).not.toContain("Prefer small diffs")
 
-    expect(await claudeRuns()).toEqual([["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Grep(./**)", "Glob(./**)", "--model", "opus", "--effort", "high", "--permission-mode", "manual", "--append-system-prompt=Prefer small diffs."]])
+    expect(await claudeRuns()).toEqual([["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--setting-sources", "user", "--allowedTools", "Grep(./**)", "Glob(./**)", "--model", "opus", "--effort", "high", "--permission-mode", "manual", "--append-system-prompt=Prefer small diffs."]])
     const stored = await readdir(join(sessionDir, "harness"))
     expect(stored).toHaveLength(1)
     expect(stored[0]).toMatch(/^claude-code-[0-9a-f]{32}\.json$/)
@@ -98,7 +98,7 @@ describe("installed coding tool routes through the CLI", () => {
     // A second engine process for the same thread picks the conversation up, with the settings of the day.
     const second = await runCli(route("claude-code", sessionDir, ["--config", join(root, "full.json"), "--model", "sonnet"]), path)
     expect(second.result.status).toBe("succeeded")
-    expect((await claudeRuns())[1]).toEqual(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--allowedTools", "Grep(./**)", "Glob(./**)", "--model", "sonnet", "--effort", "low", "--permission-mode", "bypassPermissions", "--resume", "fixture-claude-session"])
+    expect((await claudeRuns())[1]).toEqual(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--setting-sources", "user", "--allowedTools", "Grep(./**)", "Glob(./**)", "--model", "sonnet", "--effort", "low", "--permission-mode", "bypassPermissions", "--resume", "fixture-claude-session"])
   }, { timeout: 30_000 })
 
   test("explicit launch flags win over what the thread's settings imply", async () => {
@@ -106,7 +106,7 @@ describe("installed coding tool routes through the CLI", () => {
     const before = (await claudeRuns()).length
     const run = await runCli(route("claude-code", join(root, "claude-explicit"), ["--config", join(root, "full.json"), "--harness-effort", "max", "--harness-permission-mode", "plan", "--harness-append-system-prompt", "Answer in one line.", "--harness-mcp-config", "/tmp/route-mcp.json", "--harness-resume", "chosen-session"]), path)
     expect(run.result.status).toBe("succeeded")
-    expect((await claudeRuns())[before]).toEqual(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--mcp-config", "/tmp/route-mcp.json", "--allowedTools", "Grep(./**)", "Glob(./**)", "--effort", "max", "--permission-mode", "plan", "--append-system-prompt=Answer in one line.", "--resume", "chosen-session"])
+    expect((await claudeRuns())[before]).toEqual(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--setting-sources", "user", "--mcp-config", "/tmp/route-mcp.json", "--allowedTools", "Grep(./**)", "Glob(./**)", "--effort", "max", "--permission-mode", "plan", "--append-system-prompt=Answer in one line.", "--resume", "chosen-session"])
   }, { timeout: 30_000 })
 
   test("Codex runs on its app-server by default and resumes its thread", async () => {

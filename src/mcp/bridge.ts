@@ -42,6 +42,8 @@ export async function createMcpNativeTools(
   const descriptors = await client.listTools()
   const names = new Set<string>()
   const tools: NativeTool[] = []
+  // A server's tool text goes to the model unreviewed: each description is short, and all of them together are bounded.
+  let descriptionBudget = MAX_TOTAL_DESCRIPTION_CHARS
   for (const descriptor of descriptors) {
     const name = `${namespace}.${descriptor.name}`
     if (!validName(name) || names.has(name)) throw new McpBridgeError("MCP_BRIDGE_INVALID", "MCP tool identity collides or is invalid")
@@ -50,7 +52,7 @@ export async function createMcpNativeTools(
     const approval = options.requireApproval ?? (!readOnlyTools.includes(descriptor.name) || descriptor.annotations?.destructiveHint === true || descriptor.annotations?.openWorldHint === true)
     tools.push(Object.freeze({
       name,
-      description: (descriptor.description ?? `MCP tool ${descriptor.name}`).slice(0, 64 * 1024),
+      description: toolDescription(descriptor, descriptionBudget, (used) => { descriptionBudget -= used }),
       ...(capabilities.length === 0 ? {} : { capabilities }),
       ...(approval ? { requiresApproval: true } : {}),
       execute: async (input: unknown, context: Parameters<NativeTool["execute"]>[1]): Promise<unknown> => {
@@ -101,10 +103,26 @@ export async function createMcpPromptCatalog(client: McpClient): Promise<McpProm
   return new McpPromptCatalog(client, await client.listPrompts())
 }
 
+const MAX_TOOL_DESCRIPTION_CHARS = 4_096
+const MAX_TOTAL_DESCRIPTION_CHARS = 256 * 1024
+/** Once the shared budget runs low, a description is cut to a line so the tools after it still get a name and a hint. */
+const MIN_TOOL_DESCRIPTION_CHARS = 256
+
+function toolDescription(descriptor: { readonly name: string; readonly description?: string }, budget: number, spend: (used: number) => void): string {
+  const text = descriptor.description ?? `MCP tool ${descriptor.name}`
+  const allowed = Math.max(MIN_TOOL_DESCRIPTION_CHARS, Math.min(MAX_TOOL_DESCRIPTION_CHARS, budget))
+  const description = text.slice(0, allowed)
+  spend(description.length)
+  return description
+}
+
 function toolResultValue(result: McpToolCallResult, maxBytes: number): string {
-  if (result.isError === true) throw new McpBridgeError("MCP_TOOL_FAILED", "MCP tool reported an error")
   const text = result.content?.filter((block): block is Extract<NonNullable<McpToolCallResult["content"]>[number], { type: "text" }> => block.type === "text").map((block) => block.text).join("\n")
-  const value = text !== undefined && text.length > 0 ? text : result.structuredContent === undefined ? "" : JSON.stringify(result.structuredContent)
+  // The server's own explanation is what lets the model correct its call; it is bounded, not dropped.
+  if (result.isError === true) throw new McpBridgeError("MCP_TOOL_FAILED", text !== undefined && text.length > 0 ? `MCP tool reported an error: ${text.slice(0, 2_000)}` : "MCP tool reported an error")
+  const base = text !== undefined && text.length > 0 ? text : result.structuredContent === undefined ? "" : JSON.stringify(result.structuredContent)
+  const images = result.content?.filter((block) => block.type === "image").length ?? 0
+  const value = images === 0 ? base : `${base}${base.length > 0 ? "\n" : ""}[${images} image${images === 1 ? "" : "s"} not shown]`
   if (value === undefined || Buffer.byteLength(value, "utf8") > maxBytes) throw new McpBridgeError("MCP_BRIDGE_LIMIT", "MCP tool result exceeds its byte limit")
   return value
 }

@@ -241,6 +241,24 @@ describe("approval policy", () => {
     expect(await (tool!.requiresApproval as (input: unknown) => Promise<boolean>)({ program: "/tmp/planted/git", args: ["status"] })).toBe(true)
     expect(await (tool!.requiresApproval as (input: unknown) => Promise<boolean>)({ program: "git", args: ["push"] })).toBe(true)
   })
+
+  test("a key the tool ignores cannot rename the call to dodge a rule", async () => {
+    const asking: BehaviorConfig = { ...base, mode: "auto", permissionRules: [{ tool: "run_command", match: "rm *", policy: "deny" }, { tool: "write_file", match: ".github/*", policy: "deny" }, { tool: "run_command", match: "* --force", policy: "deny" }] }
+    const needs = async (name: string, input: unknown): Promise<boolean> => {
+      const [tool] = applyBehaviorToolPolicy([{ name, description: name, execute: () => null }], asking)
+      return (tool!.requiresApproval as (input: unknown) => Promise<boolean>)(input)
+    }
+    expect(await needs("run_command", { program: "rm", args: ["-rf", "x"] })).toBe(true)
+    expect(await needs("run_command", { program: "rm", args: ["-rf", "x"], command: "npm test" })).toBe(true)
+    expect(await needs("run_command", { program: "rm", args: ["-rf", "x"], action: "x" })).toBe(true)
+    expect(await needs("run_command", { program: "ls", args: ["-la"], command: "npm test" })).toBe(false)
+    expect(await needs("write_file", { path: ".github/x", action: "README.md" })).toBe(true)
+    expect(await needs("write_file", { path: "src/../.github/x" })).toBe(true)
+    expect(await needs("write_file", { path: "./.github/x" })).toBe(true)
+    expect(await needs("write_file", { path: "src/a.ts" })).toBe(false)
+    // Padding past the cap cannot push a suffix rule out of view.
+    expect(await needs("run_command", { program: "git", args: ["push", "a".repeat(5_000), "--force"] })).toBe(true)
+  })
 })
 
 import { createRunrailRuntime } from "../../src/session.ts"

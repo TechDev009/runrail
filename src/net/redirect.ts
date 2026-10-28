@@ -51,15 +51,20 @@ export function sameOrigin(next: URL, from: URL): boolean {
   return next.origin === from.origin
 }
 
-/** A name or literal address on this machine or a private network. Names are not resolved. */
+/**
+ * A name or literal address on this machine, a private network, or a range no public server uses
+ * (link-local, carrier-grade NAT, benchmarking, multicast, reserved, NAT64, 6to4). Names are not resolved,
+ * so a public name that points at a private address still passes; callers that must stop that pin the address.
+ */
 export function isPrivateHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase()
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "")
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return true
   const kind = isIP(host)
   if (kind === 4) {
-    const [a = 0, b = 0] = host.split(".").map(Number)
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+    const [a = 0, b = 0, c = 0] = host.split(".").map(Number)
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19)) || (a === 100 && b >= 64 && b <= 127)
   }
-  if (kind === 6) return host === "::1" || host === "::" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80") || host.startsWith("::ffff:")
-  return false
+  if (kind === 6) return host === "::1" || host === "::" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || host.startsWith("ff") || host.startsWith("::ffff:") || host.startsWith("64:ff9b:") || host.startsWith("2002:")
+  // A single label ("intranet") resolves only inside a network.
+  return !host.includes(".")
 }

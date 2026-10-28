@@ -29,7 +29,16 @@ export class FileNativeEventJournal implements NativeEventJournal {
     this.path = join(this.root, "events.jsonl")
     this.maxEventsPerTask = boundedLimit(options.maxEventsPerTask ?? 8_192, 1, 1_000_000, "event journal limit")
     this.maxBytes = boundedLimit(options.maxBytes ?? 16 * 1024 * 1024, 1_024, 128 * 1024 * 1024, "event journal byte limit")
-    this.load()
+    try {
+      this.load()
+    } catch (error) {
+      // The journal only mirrors events that already happened, so a damaged one is set aside rather than
+      // left to refuse every new session. A file that is merely too large or unreadable still fails.
+      if (!(error instanceof NativeContractError) || (error.code !== "NATIVE_INVALID" && error.code !== "NATIVE_STATE_CONFLICT") || readOptional(this.path) === undefined) throw error
+      renameSync(this.path, `${this.path}.corrupt`)
+      this.events.clear()
+      this.fileBytes = 0
+    }
   }
 
   append(input: NativeEventInput): NativeEvent {

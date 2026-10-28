@@ -87,6 +87,12 @@ main() {
   printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || fail "$version is not a version such as 0.1.2"
 
   base="${RUNRAIL_DOWNLOAD_URL:-https://github.com/$REPO/releases/download/v$version}"
+  # The archive and its checksums come from one place, so the checksum only guards against a damaged download;
+  # over plain http even that is open to whoever is on the path.
+  case "$base" in
+    https://*|http://localhost[:/]*|http://127.0.0.1[:/]*) ;;
+    *) fail "RUNRAIL_DOWNLOAD_URL must be an https address (plain http is accepted only for localhost)" ;;
+  esac
   stem="runrail-$version-$target"
   archive="$stem.tar.gz"
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t runrail)

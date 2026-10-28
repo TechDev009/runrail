@@ -76,6 +76,13 @@ describe("a policy with related folders", () => {
     expect(home.stdout?.trim()).toBe(root)
     await expect(tool.execute({ program: "pwd", cwd: other }, context)).rejects.toThrow()
   })
+
+  test("run_command refuses a field it does not read, so none can rename the call to an approval rule", async () => {
+    const root = await folder("runrail-folders-root-")
+    const tool = createRunCommandTool(await createWorkspacePolicy(root, []))
+    const context = { signal: new AbortController().signal } as Parameters<typeof tool.execute>[1]
+    await expect(tool.execute({ program: "pwd", command: "npm test" }, context)).rejects.toThrow("unknown field")
+  })
 })
 
 describe("related folders on each route", () => {

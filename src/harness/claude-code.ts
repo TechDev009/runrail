@@ -78,7 +78,7 @@ function normalizeClaudeCodeOptions(options: ClaudeCodeHarnessOptions): CommandA
   if (launch !== undefined) throw new HarnessLaunchError("launch options need print mode without custom arguments")
   return {
     ...rest,
-    ...(nativeCommand && options.args === undefined ? { args: ["--print", "--output-format", "stream-json", "--verbose"] } : {}),
+    ...(nativeCommand && options.args === undefined ? { args: ["--print", "--output-format", "stream-json", "--verbose", "--setting-sources", "user"] } : {}),
     ...(nativeCommand && options.promptMode === undefined ? { promptMode: "argument" as const } : {}),
     ...identity,
   }

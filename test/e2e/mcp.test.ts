@@ -95,6 +95,17 @@ describe("MCP interoperability", () => {
       await client.close()
     }
   })
+  test("a tool call is bounded by its own longer timeout, not the handshake's", async () => {
+    const client = await McpClient.connect({ command: process.execPath, args: [fixture], cwd: process.cwd(), timeoutMs: 200, callTimeoutMs: 1_500 })
+    try {
+      const started = performance.now()
+      await expect(client.callTool("hold")).rejects.toMatchObject({ code: "MCP_CLIENT_TIMEOUT" })
+      expect(performance.now() - started).toBeGreaterThan(1_000)
+    } finally {
+      await client.close()
+    }
+  })
+
   test("a stdio server's error reply carries the id of the request it refuses", async () => {
     const cwd = await mkdtemp("/tmp/runrail-mcp-stdio-id-")
     const child = Bun.spawn([process.execPath, "-e", `import { runRunrailMcpServer } from ${JSON.stringify(resolve(import.meta.dir, "../../src/mcp/stdio.ts"))}; await runRunrailMcpServer({ cwd: ${JSON.stringify(cwd)} })`], { stdin: "pipe", stdout: "pipe", stderr: "ignore" })

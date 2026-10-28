@@ -22,7 +22,10 @@ export interface McpClientOptions {
   readonly clientName?: string
   readonly clientVersion?: string
   readonly protocolVersion?: string
+  /** Bounds the handshake and listings. */
   readonly timeoutMs?: number
+  /** Bounds one `tools/call`, which can run far longer than a listing. Defaults to `timeoutMs`. */
+  readonly callTimeoutMs?: number
   readonly maxMessageBytes?: number
   readonly maxTools?: number
   readonly maxResources?: number
@@ -50,6 +53,7 @@ export class McpClient {
     return this.serverCapabilitiesValue
   }
   private readonly options: Required<Pick<McpClientOptions, "clientName" | "clientVersion" | "protocolVersion" | "timeoutMs" | "maxMessageBytes" | "maxTools" | "maxResources" | "maxPrompts">>
+  private readonly callTimeoutMs: number
   private readonly pending = new Map<McpRequestId, { readonly resolve: (response: McpJsonRpcResponse) => void; readonly reject: (error: unknown) => void; readonly timer: ReturnType<typeof setTimeout> }>()
   private nextId = 1
   private reader: Promise<void> | undefined
@@ -71,12 +75,13 @@ export class McpClient {
       maxResources: options.maxResources ?? 256,
       maxPrompts: options.maxPrompts ?? 256,
     }
+    this.callTimeoutMs = options.callTimeoutMs ?? this.options.timeoutMs
   }
 
   static async connect(options: McpStdioClientOptions): Promise<McpClient> {
-    const { command, args, cwd, env, inherit, maxMessageBytes, clientName, clientVersion, protocolVersion, timeoutMs, maxTools, maxResources, maxPrompts } = options
+    const { command, args, cwd, env, inherit, maxMessageBytes, clientName, clientVersion, protocolVersion, timeoutMs, callTimeoutMs, maxTools, maxResources, maxPrompts } = options
     const transport = new McpStdioTransport({ command, args, cwd, env, inherit, maxMessageBytes })
-    const client = new McpClient(transport, { clientName, clientVersion, protocolVersion, timeoutMs, maxMessageBytes, maxTools, maxResources, maxPrompts })
+    const client = new McpClient(transport, { clientName, clientVersion, protocolVersion, timeoutMs, callTimeoutMs, maxMessageBytes, maxTools, maxResources, maxPrompts })
     try {
       await client.initialize()
       return client
@@ -86,9 +91,10 @@ export class McpClient {
     }
   }
   static async connectHttp(options: McpHttpClientOptions): Promise<McpClient> {
-    const { url, headers, authorization, allowRemote, timeoutMs, maxMessageBytes, clientName, clientVersion, protocolVersion, maxTools, maxResources, maxPrompts } = options
-    const transport = new McpHttpTransport({ url, headers, authorization, allowRemote, timeoutMs, maxMessageBytes })
-    const client = new McpClient(transport, { clientName, clientVersion, protocolVersion, timeoutMs, maxMessageBytes, maxTools, maxResources, maxPrompts })
+    const { url, headers, authorization, allowRemote, timeoutMs, callTimeoutMs, maxMessageBytes, clientName, clientVersion, protocolVersion, maxTools, maxResources, maxPrompts } = options
+    // The transport bounds a whole POST, which carries a tool call's result, so it takes the longer limit.
+    const transport = new McpHttpTransport({ url, headers, authorization, allowRemote, timeoutMs: callTimeoutMs ?? timeoutMs, maxMessageBytes })
+    const client = new McpClient(transport, { clientName, clientVersion, protocolVersion, timeoutMs, callTimeoutMs, maxMessageBytes, maxTools, maxResources, maxPrompts })
     try {
       await client.initialize()
       return client
@@ -131,14 +137,15 @@ export class McpClient {
     const result = await this.request("tools/list", {})
     if (!isRecord(result) || !Array.isArray(result.tools) || result.tools.length > this.options.maxTools)
       throw new McpClientError("MCP_RESPONSE_INVALID", "MCP tool list is invalid")
-    return Object.freeze(result.tools.map((tool) => parseTool(tool)))
+    // One oddly named tool must not take the whole server with it.
+    return Object.freeze(result.tools.flatMap((tool) => (isRecord(tool) && validName(tool.name) ? [parseTool(tool)] : [])))
   }
 
   async callTool(name: string, input: Readonly<Record<string, unknown>> = {}, signal?: AbortSignal): Promise<McpToolCallResult> {
     this.ensureInitialized()
     if (!validName(name)) throw new McpClientError("MCP_CLIENT_INVALID", "MCP tool name is invalid")
     if (!isRecord(input)) throw new McpClientError("MCP_CLIENT_INVALID", "MCP tool arguments are invalid")
-    const result = await this.request("tools/call", { name, arguments: input }, signal)
+    const result = await this.request("tools/call", { name, arguments: input }, signal, this.callTimeoutMs)
     return parseToolResult(result)
   }
 
@@ -194,7 +201,19 @@ export class McpClient {
     await this.reader?.catch(() => undefined)
   }
 
-  private async request(method: string, params: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<unknown> {
+  private async request(method: string, params: Readonly<Record<string, unknown>>, signal?: AbortSignal, timeoutMs: number = this.options.timeoutMs): Promise<unknown> {
+    try {
+      return await this.requestOnce(method, params, signal, timeoutMs)
+    } catch (error) {
+      // The server dropped the session without running the request, so a new session and one retry is safe.
+      if (!(error instanceof McpTransportError) || error.code !== "MCP_SESSION_EXPIRED" || method === "initialize") throw error
+      this.initialized = false
+      await this.initialize()
+      return this.requestOnce(method, params, signal, timeoutMs)
+    }
+  }
+
+  private async requestOnce(method: string, params: Readonly<Record<string, unknown>>, signal: AbortSignal | undefined, timeoutMs: number): Promise<unknown> {
     this.ensureOpen()
     if (signal?.aborted) throw new McpClientError("MCP_CLIENT_CANCELLED", "MCP request was cancelled")
     const id = this.nextId++
@@ -206,7 +225,7 @@ export class McpClient {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new McpClientError("MCP_CLIENT_TIMEOUT", "MCP request timed out"))
-      }, this.options.timeoutMs)
+      }, timeoutMs)
       const rejectRequest = (error: unknown): void => {
         const entry = this.pending.get(id)
         if (entry === undefined) return
@@ -294,8 +313,8 @@ export class McpClient {
 
 function validateOptions(options: McpClientOptions): void {
   if (options === null || typeof options !== "object") throw new McpClientError("MCP_CLIENT_INVALID", "MCP options are invalid")
-  for (const [name, value] of [["timeoutMs", options.timeoutMs], ["maxMessageBytes", options.maxMessageBytes], ["maxTools", options.maxTools], ["maxResources", options.maxResources], ["maxPrompts", options.maxPrompts]] as const) {
-    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > (name === "maxMessageBytes" ? 16 * 1024 * 1024 : name === "timeoutMs" ? 120_000 : 4_096)))
+  for (const [name, value] of [["timeoutMs", options.timeoutMs], ["callTimeoutMs", options.callTimeoutMs], ["maxMessageBytes", options.maxMessageBytes], ["maxTools", options.maxTools], ["maxResources", options.maxResources], ["maxPrompts", options.maxPrompts]] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > (name === "maxMessageBytes" ? 16 * 1024 * 1024 : name === "timeoutMs" || name === "callTimeoutMs" ? 120_000 : 4_096)))
       throw new McpClientError("MCP_CLIENT_INVALID", `${name} is invalid`)
   }
 }
@@ -370,9 +389,25 @@ function parseToolResult(value: unknown): McpToolCallResult {
 
 function parseContentBlock(value: unknown): NonNullable<McpToolCallResult["content"]>[number] {
   if (!isRecord(value) || typeof value.type !== "string") throw new McpClientError("MCP_RESPONSE_INVALID", "MCP content block is invalid")
-  if (value.type === "text") return Object.freeze({ type: "text", text: boundedContent(value.text, "MCP text content", 256 * 1024) })
-  if (value.type === "image" && typeof value.data === "string" && typeof value.mimeType === "string" && value.data.length <= 4 * 1024 * 1024) return Object.freeze({ type: "image", data: value.data, mimeType: value.mimeType })
-  throw new McpClientError("MCP_RESPONSE_INVALID", "MCP content block type is unsupported")
+  // The tool has already run, so a block this client cannot show is noted in the text, not refused:
+  // refusing would report a finished side effect as a failure and invite a retry.
+  if (value.type === "text") {
+    if (typeof value.text !== "string") throw new McpClientError("MCP_RESPONSE_INVALID", "MCP text content is invalid")
+    return Object.freeze({ type: "text", text: value.text.length > MAX_TEXT_BLOCK ? `${value.text.slice(0, MAX_TEXT_BLOCK)}\n[text cut at ${MAX_TEXT_BLOCK} characters]` : value.text })
+  }
+  if (value.type === "image") {
+    if (typeof value.data === "string" && typeof value.mimeType === "string" && value.data.length <= 4 * 1024 * 1024) return Object.freeze({ type: "image", data: value.data, mimeType: value.mimeType })
+    return omittedBlock("image too large or malformed")
+  }
+  if (value.type === "resource" && isRecord(value.resource) && typeof value.resource.text === "string") return Object.freeze({ type: "text", text: value.resource.text.slice(0, MAX_TEXT_BLOCK) })
+  if (value.type === "resource_link" && typeof value.uri === "string") return omittedBlock(`resource link ${value.uri.slice(0, 256)}`)
+  return omittedBlock(`${value.type.slice(0, 32)} content`)
+}
+
+const MAX_TEXT_BLOCK = 256 * 1024
+
+function omittedBlock(what: string): NonNullable<McpToolCallResult["content"]>[number] {
+  return Object.freeze({ type: "text", text: `[${what} not shown]` })
 }
 
 function parsePromptMessage(value: unknown): NonNullable<McpPromptGetResult["messages"]>[number] {

@@ -148,9 +148,9 @@ export class FileTranscriptStore implements TranscriptStore {
       const seq = tail.lastSeq === undefined ? 0 : tail.lastSeq + 1
       const id = input.id ?? `${safeSessionId}:${seq}`
       const record = createRecord(safeSessionId, seq, id, input, this.now())
-      ensureJsonBound(record, this.maxEntryBytes)
+      const encoded = boundedJson(record, this.maxEntryBytes)
       if (tail.ids.has(record.id)) throw new TranscriptStoreError("TRANSCRIPT_CONFLICT", "record id already exists")
-      const line = `${JSON.stringify(record)}\n`
+      const line = `${encoded}\n`
       try {
         await this.appendLine(safeSessionId, line)
       } catch (error) {
@@ -189,20 +189,23 @@ export class FileTranscriptStore implements TranscriptStore {
   async read(sessionId: string, options: TranscriptReadOptions = {}): Promise<readonly TranscriptRecord[]> {
     const safeSessionId = validateSessionId(sessionId)
     const { maxRecords, maxBytes } = validateReadOptions(options, this.maxRecords)
-    const records = await this.readInternal(safeSessionId)
     const afterSeq = options.afterSeq ?? -1
+    // Sequence numbers are contiguous from zero, so nothing past the last record asked for needs parsing.
+    const records = await this.readInternal(safeSessionId, afterSeq + 1 + maxRecords)
     const selected: TranscriptRecord[] = []
     let bytes = 0
     for (const record of records) {
       if (record.seq <= afterSeq) continue
       if (selected.length >= maxRecords) break
-      const recordBytes = Buffer.byteLength(JSON.stringify(record), "utf8")
-      if (maxBytes !== undefined && bytes + recordBytes > maxBytes) {
-        if (selected.length === 0) throw new TranscriptStoreError("TRANSCRIPT_LIMIT", "transcript read exceeds the byte limit")
-        break
+      if (maxBytes !== undefined) {
+        const recordBytes = Buffer.byteLength(JSON.stringify(record), "utf8")
+        if (bytes + recordBytes > maxBytes) {
+          if (selected.length === 0) throw new TranscriptStoreError("TRANSCRIPT_LIMIT", "transcript read exceeds the byte limit")
+          break
+        }
+        bytes += recordBytes
       }
       selected.push(record)
-      bytes += recordBytes
     }
     return Object.freeze(selected)
   }
@@ -346,7 +349,7 @@ export class FileTranscriptStore implements TranscriptStore {
     return parseTranscriptBundle(source)
   }
 
-  private async readInternal(sessionId: string): Promise<TranscriptRecord[]> {
+  private async readInternal(sessionId: string, stopAfter?: number): Promise<TranscriptRecord[]> {
     let text: string
     try {
       text = await readTranscriptText(await this.pathFor(sessionId), this.byteLimit())
@@ -355,7 +358,7 @@ export class FileTranscriptStore implements TranscriptStore {
       if (error instanceof TranscriptStoreError) throw error
       throw new TranscriptStoreError("TRANSCRIPT_IO", "transcript cannot be read")
     }
-    return parseTranscriptText(sessionId, text, this.maxEntryBytes, this.maxRecords)
+    return parseTranscriptText(sessionId, text, this.maxEntryBytes, this.maxRecords, stopAfter)
   }
 
   private async writeRecords(sessionId: string, records: readonly TranscriptRecord[]): Promise<void> {
@@ -472,7 +475,7 @@ async function readTranscriptText(path: string, maxBytes: number): Promise<strin
   }
 }
 
-function parseTranscriptText(sessionId: string, text: string, maxEntryBytes: number, maxRecords: number): TranscriptRecord[] {
+function parseTranscriptText(sessionId: string, text: string, maxEntryBytes: number, maxRecords: number, stopAfter = Number.POSITIVE_INFINITY): TranscriptRecord[] {
   const records: TranscriptRecord[] = []
     for (const line of text.split("\n")) {
       if (line.trim().length === 0) continue
@@ -486,6 +489,7 @@ function parseTranscriptText(sessionId: string, text: string, maxEntryBytes: num
       if (record.sessionId !== sessionId || record.seq !== records.length) throw new TranscriptStoreError("TRANSCRIPT_INVALID", "transcript sequence is not contiguous")
       records.push(record)
       if (records.length > maxRecords) throw new TranscriptStoreError("TRANSCRIPT_LIMIT", "transcript has too many records")
+      if (records.length >= stopAfter) break
     }
     return records
   }
@@ -629,13 +633,19 @@ function readText(value: unknown, field: string): string {
 }
 
 function ensureJsonBound(value: unknown, maxBytes: number): void {
-  let encoded: string
+  boundedJson(value, maxBytes)
+}
+
+/** The value as JSON, once, refused when it is not JSON or is over `maxBytes`. */
+function boundedJson(value: unknown, maxBytes: number): string {
+  let encoded: string | undefined
   try {
     encoded = JSON.stringify(value)
   } catch {
     throw new TranscriptStoreError("TRANSCRIPT_INVALID", "payload is not JSON-serializable")
   }
   if (encoded === undefined || Buffer.byteLength(encoded, "utf8") > maxBytes) throw new TranscriptStoreError("TRANSCRIPT_LIMIT", "payload exceeds the configured size")
+  return encoded
 }
 
 function requireKnownKeys(record: Record<string, unknown>, keys: readonly string[]): void {

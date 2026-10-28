@@ -1,5 +1,6 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { isToolConfigPath } from "../workspace/policy.ts"
 
 /**
  * Claude Code runs some calls without asking: commands it judges read-only, and whatever the
@@ -106,7 +107,7 @@ function segmentsUnder(root: string, path: string): readonly string[] | undefine
 }
 
 function isControlPath(segments: readonly string[]): boolean {
-  return segments.includes(".git") || segments[0] === ".runrail" || (segments[0] === ".nifra" && segments[1] === "extensions")
+  return segments.includes(".git") || segments[0] === ".runrail" || (segments[0] === ".nifra" && segments[1] === "extensions") || isToolConfigPath(segments)
 }
 
 /** The real path of `path` through its nearest existing ancestor, following links, dangling ones too. */

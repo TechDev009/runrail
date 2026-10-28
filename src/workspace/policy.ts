@@ -1,9 +1,12 @@
-import { lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { constants } from "node:fs"
+import { lstat, mkdir, open, readdir, realpath } from "node:fs/promises"
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { wildcardMatch } from "./wildcard.ts"
 
 export const DEFAULT_MAX_FILE_BYTES = 256 * 1024
 const MAX_VISITED_ENTRIES = 50_000
+/** Files a search looks in; a bigger tree is reported as partial rather than read as empty. */
+const MAX_SEARCH_FILES = 8_192
 export const DEFAULT_MAX_TOOL_OUTPUT_BYTES = 64 * 1024
 
 export interface WorkspaceEntry {
@@ -18,6 +21,14 @@ export interface WorkspaceSearchMatch {
   readonly text: string
 }
 
+/** Filled by a listing or search that had to stop early, so the caller can say the answer is partial. */
+export interface WorkspaceReport {
+  /** The walk stopped at its entry or visit limit before it had looked everywhere. */
+  truncated: boolean
+  /** Files a search could not read or that were over its size limit. */
+  skipped: number
+}
+
 export interface WorkspacePolicy {
   readonly root: string
   /**
@@ -29,13 +40,14 @@ export interface WorkspacePolicy {
   resolveForWrite(path: string): Promise<string>
   read(path: string, maxBytes?: number): Promise<string>
   write(path: string, content: string, maxBytes?: number): Promise<{ readonly path: string; readonly bytes: number }>
-  list(path?: string, maxDepth?: number, maxEntries?: number): Promise<readonly WorkspaceEntry[]>
-  find(path: string | undefined, pattern: string, maxDepth?: number, maxEntries?: number): Promise<readonly WorkspaceEntry[]>
+  list(path?: string, maxDepth?: number, maxEntries?: number, report?: WorkspaceReport): Promise<readonly WorkspaceEntry[]>
+  find(path: string | undefined, pattern: string, maxDepth?: number, maxEntries?: number, report?: WorkspaceReport): Promise<readonly WorkspaceEntry[]>
   search(
     path: string | undefined,
     query: string,
     maxResults?: number,
     maxFileBytes?: number,
+    report?: WorkspaceReport,
   ): Promise<readonly WorkspaceSearchMatch[]>
 }
 
@@ -65,17 +77,17 @@ export async function createWorkspacePolicy(rootInput: string, foldersInput: rea
       const written = await from.write(input, content, maxBytes)
       return { path: join(from.root, written.path), bytes: written.bytes }
     },
-    async list(input = "", maxDepth, maxEntries) {
+    async list(input = "", maxDepth, maxEntries, report) {
       const from = owner(input)
-      return from === undefined ? primary.list(input, maxDepth, maxEntries) : absolute(from, await from.list(input, maxDepth, maxEntries))
+      return from === undefined ? primary.list(input, maxDepth, maxEntries, report) : absolute(from, await from.list(input, maxDepth, maxEntries, report))
     },
-    async find(input = "", pattern, maxDepth, maxEntries) {
+    async find(input = "", pattern, maxDepth, maxEntries, report) {
       const from = owner(input)
-      return from === undefined ? primary.find(input, pattern, maxDepth, maxEntries) : absolute(from, await from.find(input, pattern, maxDepth, maxEntries))
+      return from === undefined ? primary.find(input, pattern, maxDepth, maxEntries, report) : absolute(from, await from.find(input, pattern, maxDepth, maxEntries, report))
     },
-    async search(input = "", query, maxResults, maxFileBytes) {
+    async search(input = "", query, maxResults, maxFileBytes, report) {
       const from = owner(input)
-      return from === undefined ? primary.search(input, query, maxResults, maxFileBytes) : absolute(from, await from.search(input, query, maxResults, maxFileBytes))
+      return from === undefined ? primary.search(input, query, maxResults, maxFileBytes, report) : absolute(from, await from.search(input, query, maxResults, maxFileBytes, report))
     },
   }
   return Object.freeze(policy)
@@ -142,12 +154,16 @@ function rootPolicy(root: string): RootPolicy {
     },
     async read(input, maxBytes = DEFAULT_MAX_FILE_BYTES) {
       const path = await policy.resolveExisting(input)
-      const entry = await lstat(path)
-      if (!entry.isFile()) throw new TypeError("workspace path is not a regular file")
-      const size = entry.size
-      if (size > maxBytes) throw new RangeError("workspace read exceeds byte limit")
-      const data = await readFile(path)
-      return data.toString("utf8")
+      // Opened without following a link and checked on the open file, so a swap after the checks above reads nothing out of the workspace.
+      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        const entry = await handle.stat()
+        if (!entry.isFile()) throw new TypeError("workspace path is not a regular file")
+        if (entry.size > maxBytes) throw new RangeError("workspace read exceeds byte limit")
+        return (await handle.readFile()).toString("utf8")
+      } finally {
+        await handle.close()
+      }
     },
     async write(input, content, maxBytes = DEFAULT_MAX_FILE_BYTES) {
       const bytes = Buffer.byteLength(content, "utf8")
@@ -164,32 +180,45 @@ function rootPolicy(root: string): RootPolicy {
       } catch (error) {
         if (!isNotFound(error)) throw error
       }
-      await writeFile(finalPath, content, { encoding: "utf8", flag: "w" })
+      // Opened without following a link and without truncating, checked on the open file, then truncated:
+      // a link swapped in after the checks above is refused, and a device or pipe is never emptied.
+      const handle = await open(finalPath, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o666)
+      try {
+        if (!(await handle.stat()).isFile()) throw new TypeError("workspace path is not a regular file")
+        await handle.truncate(0)
+        await handle.writeFile(content, "utf8")
+      } finally {
+        await handle.close()
+      }
       return { path: relative(root, finalPath), bytes }
     },
-    async list(input = "", maxDepth = 1, maxEntries = 256) {
-      return walk(input, (path) => path.length > 0, maxDepth, maxEntries)
+    async list(input = "", maxDepth = 1, maxEntries = 256, report) {
+      return walk(input, (path) => path.length > 0, maxDepth, maxEntries, undefined, report)
     },
-    async find(input = "", pattern, maxDepth = 16, maxEntries = 256) {
+    async find(input = "", pattern, maxDepth = 16, maxEntries = 256, report) {
       const matcher = globMatcher(pattern)
       const named = pattern.toLowerCase()
       // A pattern that names a generated folder (`node_modules/**/package.json`) is looked for there.
-      return walk(input, matcher, maxDepth, maxEntries, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()) || named.includes(name.toLowerCase()))
+      return walk(input, matcher, maxDepth, maxEntries, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()) || named.includes(name.toLowerCase()), report)
     },
-    async search(input = "", query, maxResults = 128, maxFileBytes = DEFAULT_MAX_FILE_BYTES) {
+    async search(input = "", query, maxResults = 128, maxFileBytes = DEFAULT_MAX_FILE_BYTES, report) {
       if (typeof query !== "string" || query.length === 0 || query.length > 512)
         throw new TypeError("workspace search query is invalid")
       assertPositiveBound(maxResults, 1, 512, "maxResults")
       assertPositiveBound(maxFileBytes, 1, DEFAULT_MAX_FILE_BYTES, "maxFileBytes")
-      const entries = await walk(input, (path, type) => type === "file", 16, 2048, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()))
+      const entries = await walk(input, (path, type) => type === "file", 16, MAX_SEARCH_FILES, (name) => !GENERATED_FOLDERS.has(name.toLowerCase()), report)
       const matches: WorkspaceSearchMatch[] = []
       for (const entry of entries) {
         if (entry.type !== "file") continue
-        if ((entry.bytes ?? 0) > maxFileBytes) continue
+        if ((entry.bytes ?? 0) > maxFileBytes) {
+          if (report !== undefined) report.skipped += 1
+          continue
+        }
         let content: string
         try {
           content = await policy.read(entry.path, maxFileBytes)
         } catch {
+          if (report !== undefined) report.skipped += 1
           continue
         }
         if (content.includes("\0")) continue
@@ -198,7 +227,10 @@ function rootPolicy(root: string): RootPolicy {
           const line = lines[index] as string
           if (!line.includes(query)) continue
           matches.push({ path: entry.path, line: index + 1, text: line.slice(0, 1_024) })
-          if (matches.length >= maxResults) return Object.freeze(matches)
+          if (matches.length >= maxResults) {
+            if (report !== undefined) report.truncated = true
+            return Object.freeze(matches)
+          }
         }
       }
       return Object.freeze(matches)
@@ -217,9 +249,10 @@ function rootPolicy(root: string): RootPolicy {
     maxDepth: number,
     maxEntries: number,
     descend: (name: string) => boolean = () => true,
+    report?: WorkspaceReport,
   ): Promise<readonly WorkspaceEntry[]> {
     assertPositiveBound(maxDepth, 0, 32, "maxDepth")
-    assertPositiveBound(maxEntries, 1, 2_048, "maxEntries")
+    assertPositiveBound(maxEntries, 1, MAX_SEARCH_FILES, "maxEntries")
     const start = input.length === 0 ? root : await policy.resolveExisting(input)
     const startStat = await lstat(start)
     if (startStat.isSymbolicLink()) throw new Error("workspace path escapes authorized root through an unauthorized symlink")
@@ -237,7 +270,10 @@ function rootPolicy(root: string): RootPolicy {
           a.name.localeCompare(b.name),
         )
         for (const child of children) {
-          if (result.length >= maxEntries || visited >= MAX_VISITED_ENTRIES) return Object.freeze(result)
+          if (result.length >= maxEntries || visited >= MAX_VISITED_ENTRIES) {
+            if (report !== undefined) report.truncated = true
+            return Object.freeze(result)
+          }
           visited += 1
           if (child.isSymbolicLink()) continue
           const absolute = join(directory, child.name)
@@ -271,9 +307,14 @@ export function filteredEnvironment(
   const result: Record<string, string> = {}
   for (const name of allowed) {
     const value = overrides[name] ?? process.env[name]
-    if (value !== undefined) result[name] = value
+    if (value !== undefined) result[name] = name === "PATH" ? absolutePathEntries(value) : value
   }
   return result
+}
+
+/** A relative or empty PATH entry is the current folder, where a repository's own files could stand in for system programs. */
+function absolutePathEntries(value: string): string {
+  return value.split(delimiter).filter((entry) => isAbsolute(entry)).join(delimiter)
 }
 
 function resolveInside(root: string, input: string): string {
@@ -298,12 +339,14 @@ const SENSITIVE_EXTENSIONS: readonly string[] = ["pem", "key", "p12", "pfx", "ke
 const SENSITIVE_FOLDERS: readonly string[] = [".aws", ".ssh", ".gnupg", ".docker", ".kube", ".azure", ".config/gcloud"]
 const SENSITIVE_NAME_SET: ReadonlySet<string> = new Set(SENSITIVE_NAMES)
 const SENSITIVE_FOLDER_SET: ReadonlySet<string> = new Set(SENSITIVE_FOLDERS)
+/** `.env.example` and its kin hold placeholders and are meant to be read and edited. */
+const ENV_TEMPLATE_SUFFIX = /\.(example|sample|template|dist)$/
 const SENSITIVE_EXTENSION = new RegExp(`\\.(${SENSITIVE_EXTENSIONS.join("|")})$`)
 
 export function isSensitiveWorkspacePath(path: string): boolean {
   const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0)
   const name = (segments.at(-1) ?? "").toLowerCase()
-  if (SENSITIVE_NAME_SET.has(name) || SENSITIVE_NAME_PREFIXES.some((prefix) => name.startsWith(prefix)) || SENSITIVE_EXTENSION.test(name)) return true
+  if (SENSITIVE_NAME_SET.has(name) || (SENSITIVE_NAME_PREFIXES.some((prefix) => name.startsWith(prefix)) && !ENV_TEMPLATE_SUFFIX.test(name)) || SENSITIVE_EXTENSION.test(name)) return true
   const folders = segments.slice(0, -1).map((segment) => segment.toLowerCase())
   return folders.some((segment, index) => SENSITIVE_FOLDER_SET.has(segment) || SENSITIVE_FOLDER_SET.has(`${segment}/${folders[index + 1] ?? ""}`))
 }
@@ -339,10 +382,23 @@ function assertNotControlPath(root: string, path: string): void {
     throw new Error("workspace path is git's or Runrail's own configuration, which workspace tools never write")
   if (segments[0] === ".nifra" && segments[1] === "extensions")
     throw new Error("workspace path is a Nifra extension, which the engine imports and runs; workspace tools never write it")
+  if (isToolConfigPath(segments))
+    throw new Error("workspace path is a coding tool's or hook runner's configuration, which can run commands later; workspace tools never write it")
+}
+
+/** Files other coding tools and git hook runners read and execute from, which a repo's own commands then run. */
+export function isToolConfigPath(segments: readonly string[]): boolean {
+  const [first = "", second = ""] = segments
+  if (segments.length === 1 && (first === ".mcp.json" || first === ".opencode.json")) return true
+  if (first === ".husky" || first === ".githooks" || first === ".codex") return true
+  if (first === ".claude") return second === "hooks" || second.startsWith("settings")
+  if (first === ".vscode") return second === "tasks.json"
+  return false
 }
 
 function assertSafeFile(root: string, path: string): void {
-  if (isSensitiveWorkspacePath(path))
+  // Judged below the root, so a project that lives under `~/.config/gcloud` or `.ssh` is not itself off limits.
+  if (isSensitiveWorkspacePath(relative(root, path)))
     throw new Error("sensitive credential file is excluded from workspace tools")
   if (relative(root, path).split(/[\\/]/).some((segment) => VCS_FOLDERS.has(segment.toLowerCase())))
     throw new Error("version control data (.git, .hg, .svn) is excluded from workspace tools; use git commands such as git status, git log, or git show instead")

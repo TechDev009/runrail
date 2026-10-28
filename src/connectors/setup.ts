@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, readFile } from "node:fs/promises"
 import { dirname } from "node:path"
-import { randomBytes } from "node:crypto"
+import { withFileLock } from "../auth/lock.ts"
+import { writeFileAtomic } from "../runtime/atomic-write.ts"
 import { ConnectorError, createConnectorRegistry, type ConnectorDefinition, type ConnectorRegistry } from "./registry.ts"
 import { createGitHubConnector, createJiraConnector, createLinearConnector, createSlackConnector } from "./services.ts"
 
@@ -59,20 +60,25 @@ export class ConnectorSetupStore {
     if (kind === "jira" && input.on && (input.site === undefined || input.email === undefined)) throw new ConnectorError("CONNECTOR_INVALID", "Jira needs its site and the account's email")
     const setting = settingOf(kind, { ...input, updatedAt: now })
     if (setting === undefined) throw new ConnectorError("CONNECTOR_INVALID", "connector settings are invalid")
-    await this.#write({ ...(await this.read()), [kind]: setting })
+    await this.#locked(async () => this.#write({ ...(await this.read()), [kind]: setting }))
     return setting
   }
 
   async remove(kind: ConnectorKind): Promise<void> {
-    const { [kind]: _removed, ...rest } = await this.read()
-    await this.#write(rest)
+    await this.#locked(async () => {
+      const { [kind]: _removed, ...rest } = await this.read()
+      await this.#write(rest)
+    })
+  }
+
+  /** Several engines share this file; a save is read, changed and written under one lock so none is lost. */
+  async #locked(run: () => Promise<void>): Promise<void> {
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
+    await withFileLock(`${this.file}.lock`, run)
   }
 
   async #write(settings: ConnectorSettings): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
-    const temporary = `${this.file}.${randomBytes(6).toString("hex")}.tmp`
-    await writeFile(temporary, `${JSON.stringify({ version: 1, connectors: settings }, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, this.file)
+    await writeFileAtomic(this.file, `${JSON.stringify({ version: 1, connectors: settings }, null, 2)}\n`)
   }
 }
 

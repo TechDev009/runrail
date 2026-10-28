@@ -9,6 +9,8 @@ import type { OAuthCredential, StoredCredential } from "./vault.ts"
 const FLOW_ID = /^[a-z][a-z0-9-]{0,63}$/
 const MAX_MANUAL_INPUT_BYTES = 8 * 1024
 const MAX_REDIRECT_PARAM_BYTES = 512
+/** Failed polls of a device code in a row before the sign-in gives up. */
+const MAX_POLL_BLIPS = 5
 
 export interface AuthorizeInput {
   readonly redirectUri: string
@@ -243,10 +245,20 @@ export function createDeviceCodeSignIn(descriptor: DeviceCodeSignInDescriptor, t
       session.emit({ type: "device-code", userCode, verificationUrl, expiresAt: deadline })
 
       let intervalMs = Math.max(minIntervalMs, (seconds(device?.interval) ?? defaultIntervalMs / 1_000) * 1_000)
+      let blips = 0
       for (;;) {
         await sleep(intervalMs, session.signal)
         if (session.now() >= deadline) throw new SignInError("AUTH_EXPIRED", "the code was not entered in time")
-        const polled = await signInPost(tokenUrl, { form: { grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: deviceCode, client_id: descriptor.clientId } }, session.signal)
+        let polled: Awaited<ReturnType<typeof signInPost>>
+        try {
+          polled = await signInPost(tokenUrl, { form: { grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: deviceCode, client_id: descriptor.clientId } }, session.signal)
+        } catch (error) {
+          // The person may be mid-entry and the code still good; a network blip waits a turn, a few in a row end it.
+          if (!(error instanceof SignInError) || error.code !== "AUTH_NETWORK" || ++blips > MAX_POLL_BLIPS) throw error
+          intervalMs += slowDownMs
+          continue
+        }
+        blips = 0
         if (polled.status >= 200 && polled.status < 300 && polled.body !== undefined && oauthErrorWord(polled.body) === undefined) {
           session.emit({ type: "finishing" })
           return descriptor.credential === undefined ? tokenCredential(polled.body, session.now()) : await descriptor.credential(polled.body, session.now(), session.signal)

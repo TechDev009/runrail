@@ -46,6 +46,8 @@ interface PtySession {
   readonly terminal: Bun.Terminal
   readonly decoder: TextDecoder
   readonly chunks: { readonly seq: number; readonly data: string; readonly bytes: number }[]
+  /** Chunks before this index are dropped; cut away in a batch, since `shift` on a long list is linear. */
+  head: number
   bufferedBytes: number
   lastSeq: number
   closedAt?: number
@@ -104,9 +106,14 @@ export function createPtyTerminalBridge(options: PtyTerminalBridgeOptions = {}):
       session.chunks.push({ seq: session.lastSeq, data, bytes })
       session.bufferedBytes += bytes
     }
-    while (session.bufferedBytes > maxBufferedBytes && session.chunks.length > 1) {
-      const dropped = session.chunks.shift()
+    while (session.bufferedBytes > maxBufferedBytes && session.chunks.length - session.head > 1) {
+      const dropped = session.chunks[session.head]
+      session.head += 1
       if (dropped !== undefined) session.bufferedBytes -= dropped.bytes
+    }
+    if (session.head >= 512 && session.head * 2 >= session.chunks.length) {
+      session.chunks.splice(0, session.head)
+      session.head = 0
     }
   }
 
@@ -179,7 +186,7 @@ export function createPtyTerminalBridge(options: PtyTerminalBridgeOptions = {}):
         try { child.kill("SIGKILL") } catch { /* not started */ }
         throw new Error("terminal could not be allocated")
       }
-      session = { sessionId: input.sessionId, cols: input.cols, rows: input.rows, status: "running", process: child, terminal, decoder, chunks: [], bufferedBytes: 0, lastSeq: 0 }
+      session = { sessionId: input.sessionId, cols: input.cols, rows: input.rows, status: "running", process: child, terminal, decoder, chunks: [], head: 0, bufferedBytes: 0, lastSeq: 0 }
       sessions.set(input.sessionId, session)
       const created = session
       void child.exited.then(() => finish(created), () => finish(created))
@@ -196,14 +203,18 @@ export function createPtyTerminalBridge(options: PtyTerminalBridgeOptions = {}):
       const chunks: RunrailTerminalChunk[] = []
       let bytes = 0
       let nextSeq = Math.max(0, input.afterSeq)
-      for (const chunk of session.chunks) {
+      // Sequence numbers are consecutive, so the first chunk after the cursor is found by arithmetic.
+      const firstSeq = session.chunks[session.head]?.seq
+      const start = firstSeq === undefined ? session.chunks.length : session.head + Math.max(0, input.afterSeq + 1 - firstSeq)
+      for (let index = start; index < session.chunks.length; index += 1) {
+        const chunk = session.chunks[index]!
         if (chunk.seq <= input.afterSeq) continue
         if (chunks.length >= input.maxChunks || bytes + chunk.bytes > input.maxBytes) break
         chunks.push(Object.freeze({ seq: chunk.seq, data: chunk.data }))
         bytes += chunk.bytes
         nextSeq = chunk.seq
       }
-      const oldest = session.chunks[0]?.seq ?? session.lastSeq + 1
+      const oldest = session.chunks[session.head]?.seq ?? session.lastSeq + 1
       return Object.freeze({
         session: snapshot(session),
         chunks: Object.freeze(chunks),
@@ -235,20 +246,16 @@ export function createPtyTerminalBridge(options: PtyTerminalBridgeOptions = {}):
 function splitUtf8(text: string, maxBytes: number): string[] {
   if (text.length === 0) return []
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return [text]
+  const bytes = Buffer.from(text, "utf8")
   const pieces: string[] = []
-  let current = ""
-  let currentBytes = 0
-  for (const char of text) {
-    const size = Buffer.byteLength(char, "utf8")
-    if (currentBytes + size > maxBytes) {
-      pieces.push(current)
-      current = ""
-      currentBytes = 0
-    }
-    current += char
-    currentBytes += size
+  for (let start = 0; start < bytes.length;) {
+    let end = Math.min(start + maxBytes, bytes.length)
+    // A continuation byte starts no character, so back up to where one begins.
+    if (end < bytes.length) while (end > start && (bytes[end]! & 0xc0) === 0x80) end -= 1
+    if (end === start) end = Math.min(start + maxBytes, bytes.length)
+    pieces.push(bytes.toString("utf8", start, end))
+    start = end
   }
-  if (current.length > 0) pieces.push(current)
   return pieces
 }
 

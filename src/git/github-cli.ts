@@ -187,6 +187,14 @@ function cliEnvironment(): Record<string, string> {
   env.GH_NO_EXTENSION_UPDATE_NOTIFIER = "1"
   env.NO_COLOR = "1"
   env.GIT_TERMINAL_PROMPT = "0"
+  // `gh` runs git in the repository for some commands, which would read the repository's own config. Settings given
+  // through the environment outrank every config file, so the programs that config can name are switched off here.
+  const overrides = [["core.fsmonitor", "false"], ["core.pager", "cat"], ["core.hooksPath", "/dev/null"], ["core.sshCommand", "ssh"], ["protocol.ext.allow", "never"]] as const
+  env.GIT_CONFIG_COUNT = String(overrides.length)
+  overrides.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${String(index)}`] = key
+    env[`GIT_CONFIG_VALUE_${String(index)}`] = value
+  })
   return env
 }
 

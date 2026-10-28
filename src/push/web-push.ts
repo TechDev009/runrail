@@ -137,13 +137,23 @@ export interface Vapid {
   readonly privateKey: CryptoKey
 }
 
+const keyRuns = new Map<string, Promise<Vapid>>()
+
 /** This computer's VAPID key pair, made on first use and kept owner-only in `dir`. */
-export async function vapidKeys(dir: string): Promise<Vapid> {
+export function vapidKeys(dir: string): Promise<Vapid> {
+  // Two first callers must not each make a key: the second would replace the file under the first's feet.
+  let run = keyRuns.get(dir)
+  if (run === undefined) {
+    run = loadVapidKeys(dir).finally(() => keyRuns.delete(dir))
+    keyRuns.set(dir, run)
+  }
+  return run
+}
+
+async function loadVapidKeys(dir: string): Promise<Vapid> {
   const file = join(dir, "vapid.json")
-  const saved = await readFile(file, "utf8").then(
-    (text) => JSON.parse(text) as Partial<VapidFile>,
-    () => undefined,
-  )
+  // A file that cannot be read or parsed is replaced by a new key.
+  const saved = await readFile(file, "utf8").then((text) => JSON.parse(text) as Partial<VapidFile>).catch(() => undefined)
   if (saved?.version === 1 && typeof saved.publicKey === "string" && typeof saved.privateKey === "object") {
     try {
       return { publicKey: saved.publicKey, privateKey: await crypto.subtle.importKey("jwk", saved.privateKey, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]) }

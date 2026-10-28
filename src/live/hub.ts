@@ -51,6 +51,8 @@ export interface LiveFrameHubOptions {
 export class LiveFrameHub {
   readonly sink: RunrailLiveSink
   private readonly frames: { readonly frame: RunrailLiveFrame; readonly bytes: number }[] = []
+  /** Frames before this index are dropped; they are cut away in a batch, since `shift` on a long ring is linear. */
+  private head = 0
   private readonly listeners = new Set<(frame: RunrailLiveFrame) => void>()
   private readonly agentCalls = new Set<string>()
   private readonly detachedAgentCalls = new Set<string>()
@@ -95,25 +97,30 @@ export class LiveFrameHub {
   since(afterLiveSeq = 0, maxFrames = 512): readonly RunrailLiveFrame[] {
     if (!Number.isSafeInteger(afterLiveSeq) || afterLiveSeq < 0) throw new RangeError("live frame cursor is invalid")
     if (!Number.isSafeInteger(maxFrames) || maxFrames < 1) throw new RangeError("live frame limit is invalid")
-    const first = this.frames[0]
+    const first = this.frames[this.head]
     if (first !== undefined && afterLiveSeq < first.frame.liveSeq - 1) throw new LiveFrameCursorError()
-    const result: RunrailLiveFrame[] = []
-    for (const entry of this.frames) {
-      if (entry.frame.liveSeq <= afterLiveSeq) continue
-      result.push(entry.frame)
-      if (result.length >= maxFrames) break
+    // `liveSeq` rises along the ring, so the first frame after the cursor is found by halving.
+    let low = this.head
+    let high = this.frames.length
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (this.frames[middle]!.frame.liveSeq <= afterLiveSeq) low = middle + 1
+      else high = middle
     }
+    const result: RunrailLiveFrame[] = []
+    for (let index = low; index < this.frames.length && result.length < maxFrames; index += 1) result.push(this.frames[index]!.frame)
     return Object.freeze(result)
   }
 
   /** Oldest live cursor still replayable; used by streams that tolerate gaps. */
   oldestCursor(): number {
-    const first = this.frames[0]
+    const first = this.frames[this.head]
     return first === undefined ? this.lastLiveSeq : first.frame.liveSeq - 1
   }
 
   clear(): void {
-    this.frames.splice(0)
+    this.frames.length = 0
+    this.head = 0
     this.bytes = 0
     this.agentCalls.clear()
     this.detachedAgentCalls.clear()
@@ -184,9 +191,14 @@ export class LiveFrameHub {
     const bytes = Buffer.byteLength(JSON.stringify(frame), "utf8")
     this.frames.push({ frame, bytes })
     this.bytes += bytes
-    while (this.frames.length > this.maxFrames || (this.bytes > this.maxBytes && this.frames.length > 1)) {
-      const dropped = this.frames.shift()
+    while (this.frames.length - this.head > this.maxFrames || (this.bytes > this.maxBytes && this.frames.length - this.head > 1)) {
+      const dropped = this.frames[this.head]
+      this.head += 1
       if (dropped !== undefined) this.bytes -= dropped.bytes
+    }
+    if (this.head >= 1_024 && this.head * 2 >= this.frames.length) {
+      this.frames.splice(0, this.head)
+      this.head = 0
     }
     for (const listener of this.listeners) {
       try {

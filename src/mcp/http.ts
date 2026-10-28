@@ -60,6 +60,11 @@ export class McpHttpTransport implements McpTransport {
       if (!response.ok) {
         await response.body?.cancel().catch(() => undefined)
         if (response.status === 401) throw new McpTransportError("MCP_UNAUTHORIZED", "MCP server refused the request's credentials")
+        // The server forgot the session; the client starts a new one and asks again.
+        if (response.status === 404 && this.sessionId !== undefined) {
+          this.sessionId = undefined
+          throw new McpTransportError("MCP_SESSION_EXPIRED", "MCP session is no longer known to the server")
+        }
         throw new McpTransportError("MCP_TRANSPORT_FAILED", "MCP HTTP request failed")
       }
       const sessionId = response.headers.get("mcp-session-id")
@@ -78,7 +83,9 @@ export class McpHttpTransport implements McpTransport {
       // A stream that answered everything asked of it, or carried no request, ends at the timeout.
       if (controller.signal.aborted && awaiting?.size === 0 && !this.closed) return
       const normalized = error instanceof McpTransportError ? error : controller.signal.aborted ? new McpTransportError("MCP_TRANSPORT_FAILED", "MCP HTTP request timed out") : new McpTransportError("MCP_TRANSPORT_FAILED", "MCP HTTP request failed")
-      this.fail(normalized)
+      // A flood or an oversized reply ends the transport. A timeout, a 5xx or a lapsed sign-in fails only this
+      // request, so one slow call does not end the server for the whole thread.
+      if (normalized.code === "MCP_MESSAGE_LIMIT") this.fail(normalized)
       throw normalized
     } finally {
       clearTimeout(timer)

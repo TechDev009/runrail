@@ -14,6 +14,7 @@ export class FileShareStore implements ShareStore {
   private readonly maxBytes: number
   private readonly memory: InMemoryShareStore
   private loaded = false
+  private loading: Promise<void> | undefined
   private writing: Promise<void> = Promise.resolve()
 
   constructor(options: { readonly root: string; readonly maxShares?: number; readonly maxBytes?: number }) {
@@ -53,8 +54,17 @@ export class FileShareStore implements ShareStore {
     await this.flush()
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return
+  /** One load, however many callers arrive first: a second reader must not put old state over a write already made. */
+  private ensureLoaded(): Promise<void> {
+    if (this.loaded) return Promise.resolve()
+    this.loading ??= this.load().catch((error: unknown) => {
+      this.loading = undefined
+      throw error
+    })
+    return this.loading
+  }
+
+  private async load(): Promise<void> {
     let text: string
     try {
       text = await readFile(this.path, "utf8")

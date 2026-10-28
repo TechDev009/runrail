@@ -321,8 +321,11 @@ function commandOf(value: Record<string, unknown>, state: { truncated: boolean }
   else if (typeof value.cmd === "string") command = value.cmd
   else if (typeof value.program === "string") command = argvText([value.program, ...(Array.isArray(value.args) ? value.args : [])])
   if (command === undefined) return undefined
-  const oneLine = (wrappedScript(command) ?? command).replace(/[\r\n]+/g, " ").trim()
-  if (oneLine.length === 0) return undefined
+  const script = (wrappedScript(command) ?? command).replace(/[\r\n]+/g, " ").trim()
+  if (script.length === 0) return undefined
+  // A command that runs in a related folder says so: the card is what the person approves.
+  const where = typeof value.cwd === "string" && value.cwd.length > 0 ? argvText([value.cwd]) : undefined
+  const oneLine = where === undefined ? script : `cd ${where} && ${script}`
   if (oneLine.length > MAX_COMMAND) state.truncated = true
   return oneLine.slice(0, MAX_COMMAND)
 }

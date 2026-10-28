@@ -21,6 +21,6 @@ test("a redirect is followed only where the caller allows, and never carries the
 })
 
 test("private and loopback addresses are recognised", () => {
-  for (const host of ["localhost", "127.0.0.1", "10.1.2.3", "192.168.0.1", "172.20.0.1", "169.254.169.254", "[::1]", "fd00::1", "printer.local"]) expect([host, isPrivateHost(host)]).toEqual([host, true])
+  for (const host of ["localhost", "127.0.0.1", "10.1.2.3", "192.168.0.1", "172.20.0.1", "169.254.169.254", "[::1]", "fd00::1", "printer.local", "[::]", "198.18.0.1", "192.0.0.8", "224.0.0.1", "[64:ff9b::7f00:1]", "intranet"]) expect([host, isPrivateHost(host)]).toEqual([host, true])
   for (const host of ["example.com", "8.8.8.8", "172.32.0.1"]) expect([host, isPrivateHost(host)]).toEqual([host, false])
 })

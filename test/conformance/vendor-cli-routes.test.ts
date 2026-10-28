@@ -57,7 +57,7 @@ describe("Claude Code print-mode route", () => {
     expect(events[0]).toMatchObject({ type: "turn.started", prompt })
     expect(seen(events)).toEqual({
       argv: [
-        "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+        "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--setting-sources", "user",
         "--mcp-config", "/tmp/runrail-mcp.json",
         "--allowedTools", "Grep(./**)", "Glob(./**)",
         "--model", "opus",

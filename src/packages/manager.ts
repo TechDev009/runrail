@@ -90,6 +90,8 @@ export class NativePackageManager {
   private readonly requireSignature: boolean
   private readonly trustedSigners: ReadonlyMap<string, KeyObject>
   private readonly installed = new Map<string, NativeInstalledPackage>()
+  /** Folders under the package root that did not verify, by folder name; a repository can carry such a folder. */
+  private readonly rejected = new Map<string, string>()
   private state: PackageState = { version: 1, enabled: {}, active: {} }
   private initialized = false
 
@@ -125,14 +127,23 @@ export class NativePackageManager {
     const state = await this.readState()
     this.state = state
     this.installed.clear()
+    this.rejected.clear()
     const entries = (await readdir(packageRoot, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue
-      const root = await realpath(join(packageRoot, entry.name))
-      assertInside(packageRoot, root)
-      const manifest = await readNativePackageManifest(root)
-      await this.verifyRoot(root, manifest)
-      this.assertAdmissible(manifest)
+      let root: string
+      let manifest: Awaited<ReturnType<typeof readNativePackageManifest>>
+      try {
+        root = await realpath(join(packageRoot, entry.name))
+        assertInside(packageRoot, root)
+        manifest = await readNativePackageManifest(root)
+        await this.verifyRoot(root, manifest)
+        this.assertAdmissible(manifest)
+      } catch (error) {
+        // One bad folder must not stop the rest, or the commands that would remove it.
+        this.rejected.set(entry.name, error instanceof Error ? error.message : "package could not be verified")
+        continue
+      }
       const enabled = this.state.enabled[manifest.id] ?? manifest.enabled
       const active = this.state.active[manifest.id] ?? false
       this.installed.set(manifest.id, Object.freeze({ manifest: Object.freeze({ ...manifest, enabled }), root, enabled, active }))
@@ -260,6 +271,12 @@ export class NativePackageManager {
     await this.ensureInitialized()
     const packageId = boundedNativeId(id, "package id")
     const current = this.installed.get(packageId)
+    if (current === undefined && this.rejected.has(packageId)) {
+      // A folder that cannot be verified can still be taken away; `rm` removes a link, not what it points at.
+      await rm(join(this.packageRoot, packageId), { recursive: true, force: false })
+      this.rejected.delete(packageId)
+      return
+    }
     if (current === undefined) throw new NativeContractError("NATIVE_NOT_FOUND", `package '${packageId}' was not found`)
     if (current.active) throw new NativeContractError("NATIVE_STATE_CONFLICT", "active package must be deactivated before removal")
     await rm(current.root, { recursive: true, force: false })

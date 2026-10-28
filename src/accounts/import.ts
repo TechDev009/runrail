@@ -85,7 +85,8 @@ function classify(source: ImportSource, provider: RawProvider, environment: Read
     return undefined
   }
   if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username.length > 0 || url.password.length > 0) return undefined
-  const preset = PROVIDER_PRESETS.find((entry) => entry.signInOnly !== true && new URL(entry.baseUrl).host === url.host)
+  // The scheme must match too: `http://api.openai.com` is not the provider's own address.
+  const preset = PROVIDER_PRESETS.find((entry) => entry.signInOnly !== true && new URL(entry.baseUrl).host === url.host && new URL(entry.baseUrl).protocol === url.protocol)
   const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]"
   if (preset === undefined && !loopback && url.protocol !== "https:") return undefined
   const name = typeof provider.name === "string" && provider.name.length > 0 && provider.name.length <= 80 && !/[\0-\x1f\x7f]/.test(provider.name) ? provider.name : provider.id

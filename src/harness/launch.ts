@@ -56,8 +56,11 @@ export const CLAUDE_CODE_EFFORTS: readonly HarnessEffort[] = Object.freeze(["low
 /** Bounds for one turn of a vendor coding CLI. A coding turn runs far longer than a probe. */
 export const HARNESS_ROUTE_LIMITS = Object.freeze({ timeoutMs: 3_600_000, maxOutputBytes: 256 * 1024 * 1024, maxEvents: 200_000 })
 
-/** Fixed `claude` arguments for one print-mode turn; per-turn settings follow them. */
-export const CLAUDE_CODE_PRINT_ARGS: readonly string[] = Object.freeze(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+/**
+ * Fixed `claude` arguments for one print-mode turn; per-turn settings follow them.
+ * Print mode skips the trust dialog, so only the person's own settings load: a cloned repo's hooks must not run.
+ */
+export const CLAUDE_CODE_PRINT_ARGS: readonly string[] = Object.freeze(["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--setting-sources", "user"])
 
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._\-:/@+[\]]{0,127}$/
 const VENDOR_SESSION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/

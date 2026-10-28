@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path"
 import type { SubagentRunnerOptions, SubagentSpec } from "@nifrajs/coding-agent"
 import { filteredEnvironment } from "../workspace/policy.ts"
 import { repositoryProgramOverrides } from "../git/repo-config.ts"
+import { terminateProcessTree } from "../backend/process-tree.ts"
 import { containedPath, ensureContainedDirectory } from "../runtime/contained-path.ts"
 
 export interface WorktreeManagerOptions {
@@ -25,6 +26,9 @@ export interface WorktreeLease {
   readonly revision: string
   readonly cleanup: () => Promise<void>
 }
+
+/** A checkout of a large repository is slow; one that stalls longer than this holds a lease slot for good. */
+const GIT_TIMEOUT_MS = 300_000
 
 export type WorktreeErrorCode = "WORKTREE_INVALID" | "WORKTREE_LIMIT" | "WORKTREE_FAILED" | "WORKTREE_CANCELLED"
 
@@ -93,6 +97,8 @@ export class LocalGitWorktreeManager {
       this.active.delete(request.id)
       await this.runGit(["-C", root, "worktree", "remove", "--force", leaseRoot]).catch(() => undefined)
       await rm(leaseRoot, { recursive: true, force: true })
+      // A remove that failed leaves the worktree registered, and the next create with this id would be refused.
+      await this.runGit(["-C", root, "worktree", "prune"]).catch(() => undefined)
     }
     const lease = Object.freeze({ id: request.id, cwd: leaseRoot, revision, cleanup })
     this.active.set(request.id, lease)
@@ -125,17 +131,25 @@ export class LocalGitWorktreeManager {
     const safety = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", ...overrides]
     let child: Bun.Subprocess<"ignore", "ignore", "ignore">
     try {
-      child = Bun.spawn([this.gitCommand, ...this.gitArgs, ...safety, ...args], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env })
+      // Its own process group, so a stop reaches the hooks and filters git started, not only git.
+      child = Bun.spawn([this.gitCommand, ...this.gitArgs, ...safety, ...args], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env, detached: true })
     } catch (error) {
       throw new WorktreeError("WORKTREE_FAILED", error instanceof Error ? error.message : "git worktree command failed")
     }
-    const abort = (): void => child.kill()
+    let timedOut = false
+    const abort = (): void => void terminateProcessTree(child)
+    const timer = setTimeout(() => {
+      timedOut = true
+      abort()
+    }, GIT_TIMEOUT_MS)
     signal?.addEventListener("abort", abort, { once: true })
     try {
       const status = await child.exited
       if (signal?.aborted) throw new WorktreeError("WORKTREE_CANCELLED", "worktree command was cancelled")
+      if (timedOut) throw new WorktreeError("WORKTREE_FAILED", "git worktree command timed out")
       if (status !== 0) throw new WorktreeError("WORKTREE_FAILED", "git worktree command failed")
     } finally {
+      clearTimeout(timer)
       signal?.removeEventListener("abort", abort)
     }
   }

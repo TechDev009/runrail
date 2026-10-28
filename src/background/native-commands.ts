@@ -11,6 +11,7 @@ import { filteredEnvironment } from "../workspace/policy.ts"
 export const MAX_RUNNING_COMMANDS = 4
 const MAX_KEPT_COMMANDS = 16
 const OUTPUT_CHARS = 256 * 1024
+const OUTPUT_SLACK_CHARS = 64 * 1024
 const STOP_GRACE_MS = 3_000
 
 export class BackgroundCommandError extends Error {
@@ -134,7 +135,8 @@ export class NativeBackgroundCommands {
   private append(command: Command, text: string): void {
     if (text.length === 0) return
     command.output += text
-    if (command.output.length > OUTPUT_CHARS) {
+    // Trimmed in steps, not on every chunk: slicing a 256 KB string per chunk is quadratic under heavy output.
+    if (command.output.length > OUTPUT_CHARS + OUTPUT_SLACK_CHARS) {
       const cut = command.output.length - OUTPUT_CHARS
       command.output = command.output.slice(cut)
       command.dropped += cut

@@ -1119,7 +1119,7 @@ export class CodexAppServerBackend implements AgentBackend {
     // The call spends this turn's browser and connector access, so it must name this thread and turn.
     const threadId = text(input.threadId)
     const turnId = text(input.turnId)
-    const foreign = threadId === undefined || threadId !== this.vendorThreadId || (turnId !== undefined && active.vendorTurnId !== undefined && turnId !== active.vendorTurnId)
+    const foreign = threadId === undefined || threadId !== this.vendorThreadId || (active.vendorTurnId !== undefined && turnId !== active.vendorTurnId)
     if (foreign || active.controller.signal.aborted || this.active !== active) {
       await this.writeMessage({ id, result: { success: false, contentItems: [{ type: "inputText", text: "This tool call is not part of the running turn." }] } }).catch(() => undefined)
       return

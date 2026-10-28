@@ -105,6 +105,8 @@ export class PluginManager {
   private readonly maxPackageBytes: number
   private readonly maxPackageFiles: number
   private readonly installed = new Map<string, InternalPlugin>()
+  /** Folders under the plugin root that did not verify, by folder name; a repository can carry such a folder. */
+  private readonly rejected = new Map<string, unknown>()
   private readonly configurations = new Map<string, unknown>()
   private initialized = false
 
@@ -141,14 +143,23 @@ export class PluginManager {
     assertInside(this.workspaceRoot, this.pluginRoot)
     const state = await this.readState()
     this.installed.clear()
+    this.rejected.clear()
     this.registryClear()
     const entries = (await readdir(this.pluginRoot, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue
-      const root = await realpath(join(this.pluginRoot, entry.name))
-      assertInside(this.pluginRoot, root)
-      const manifest = await readManifest(root)
-      await verifyIntegrity(root, manifest, this.maxPackageBytes, this.maxPackageFiles)
+      let root: string
+      let manifest: Awaited<ReturnType<typeof readManifest>>
+      try {
+        root = await realpath(join(this.pluginRoot, entry.name))
+        assertInside(this.pluginRoot, root)
+        manifest = await readManifest(root)
+        await verifyIntegrity(root, manifest, this.maxPackageBytes, this.maxPackageFiles)
+      } catch (error) {
+        // One bad folder must not stop the rest, or the commands that would remove it.
+        this.rejected.set(entry.name, error)
+        continue
+      }
       const enabled = state.enabled[manifest.id] ?? manifest.enabled
       const effective = Object.freeze({ ...manifest, enabled })
       const plugin = Object.freeze({ manifest: effective, root, enabled })
@@ -263,7 +274,11 @@ export class PluginManager {
   async reload(): Promise<readonly InstalledPlugin[]> {
     await this.close()
     this.initialized = false
-    return this.initialize()
+    const installed = await this.initialize()
+    // Starting up carries on past a folder that does not verify; a reload the person asked for says so.
+    const [first] = this.rejected.values()
+    if (first !== undefined) throw first
+    return installed
   }
 
   async activate(id: string, policy: PluginTrustPolicy = {}, approvalGranted = false): Promise<PluginHostSnapshot> {
@@ -430,9 +445,20 @@ export class PluginManager {
     return Object.freeze({ ...updated })
   }
 
+  /** Folders that did not verify at the last load, with why. */
+  unavailable(): readonly { readonly name: string; readonly reason: string }[] {
+    return Object.freeze([...this.rejected].map(([name, error]) => Object.freeze({ name, reason: error instanceof Error ? error.message : "plugin could not be verified" })))
+  }
+
   async remove(id: string): Promise<void> {
     await this.ensureInitialized()
     const plugin = this.installed.get(id)
+    if (plugin === undefined && this.rejected.has(id)) {
+      // A folder that cannot be verified can still be taken away; `rm` removes a link, not what it points at.
+      await rm(join(this.pluginRoot, id), { recursive: true, force: false })
+      this.rejected.delete(id)
+      return
+    }
     if (plugin === undefined) throw new PluginManagerError("PLUGIN_NOT_FOUND", `unknown plugin '${id}'`)
     await this.deactivate(id)
     await rm(plugin.root, { recursive: true, force: false })
@@ -586,6 +612,7 @@ export async function createPluginIntegrity(
 }
 
 const MAX_MANIFEST_BYTES = 1024 * 1024
+const INTEGRITY_READ_BATCH = 16
 const MAX_STATE_BYTES = 256 * 1024
 // Folders count against the walk as files do, so an empty deep or wide tree cannot run it long.
 const MAX_PACKAGE_DEPTH = 32
@@ -630,9 +657,14 @@ async function computeIntegrity(root: string, maxBytes: number, maxFiles: number
   const hash = createHash("sha256")
   framed(hash, Buffer.from(RUNRAIL_PLUGIN_MANIFEST_FILE))
   framed(hash, Buffer.from(normalizedManifest))
-  for (const file of files) {
-    framed(hash, Buffer.from(file.relative))
-    framed(hash, await readFile(file.absolute))
+  // Read a few at a time, hashed in path order: the digest is the same, the disk waits overlap.
+  for (let start = 0; start < files.length; start += INTEGRITY_READ_BATCH) {
+    const batch = files.slice(start, start + INTEGRITY_READ_BATCH)
+    const contents = await Promise.all(batch.map((file) => readFile(file.absolute)))
+    batch.forEach((file, index) => {
+      framed(hash, Buffer.from(file.relative))
+      framed(hash, contents[index]!)
+    })
   }
   return hash.digest("hex")
 }

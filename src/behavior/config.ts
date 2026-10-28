@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from "node:fs/promises"
-import { join, relative, sep } from "node:path"
+import { join, posix, relative, sep } from "node:path"
 import type { NativeApprovalPort, NativeTool } from "@nifrajs/coding-agent"
 import { INTEGRATION_GRANTS, type IntegrationGrant, type IntegrationGrants } from "../connectors/tools.ts"
 import { wildcardMatch } from "../workspace/wildcard.ts"
@@ -389,25 +389,44 @@ function inputPolicy(config: BehaviorConfig, toolName: string, input: unknown, f
   return strictest ?? behaviorPolicyFor(config, toolName, fallback || toolName)
 }
 
+const ACTION_LABEL_KEYS = ["action", "command", "path", "operation"] as const
+const MAX_ACTION_CHARS = 4_096
+
+/** A long action keeps both ends, so padding in the middle cannot hide a suffix such as `--force`. */
+function boundedAction(value: string): readonly string[] {
+  return value.length <= MAX_ACTION_CHARS ? [value] : [value.slice(0, MAX_ACTION_CHARS), value.slice(-MAX_ACTION_CHARS)]
+}
+
+/** Every way the call can be named: a tool ignores keys it does not read, so none may shadow another. */
 function approvalActions(toolName: string, input: unknown, fallback: string): readonly string[] {
-  if (typeof input === "string") return [input.slice(0, 4_096)]
+  if (typeof input === "string") return boundedAction(input)
+  const actions = new Set<string>()
   if (isRecord(input)) {
-    for (const key of ["action", "command", "path", "operation"] as const) {
+    for (const key of ACTION_LABEL_KEYS) {
       const value = input[key]
-      if (typeof value === "string") return [value.slice(0, 4_096)]
+      if (typeof value !== "string") continue
+      for (const action of boundedAction(value)) actions.add(action)
+      // `src/../.github/x` is the file `.github/x`; a rule on one must meet the other.
+      if (key === "path") for (const action of boundedAction(normalizedRelativePath(value))) actions.add(action)
     }
     const argv = Array.isArray(input.argv) && input.argv.length > 0 && input.argv.every((value) => typeof value === "string") ? (input.argv as string[]) : undefined
     // run_command takes `{program, args}`.
     const program = typeof input.program === "string" ? [input.program, ...(Array.isArray(input.args) ? input.args.filter((value): value is string => typeof value === "string") : [])] : undefined
     const words = program ?? argv
     if (words !== undefined) {
-      const named = words.join(" ").slice(0, 4_096)
+      const named = words.join(" ")
       const head = words[0] ?? ""
       const base = head.slice(head.lastIndexOf("/") + 1)
-      return base.length > 0 && base !== head ? [named, [base, ...words.slice(1)].join(" ").slice(0, 4_096)] : [named]
+      for (const action of boundedAction(named)) actions.add(action)
+      if (base.length > 0 && base !== head) for (const action of boundedAction([base, ...words.slice(1)].join(" "))) actions.add(action)
     }
   }
-  return [fallback || toolName]
+  return actions.size > 0 ? [...actions] : [fallback || toolName]
+}
+
+function normalizedRelativePath(value: string): string {
+  const flat = posix.normalize(value)
+  return flat.startsWith("./") ? flat.slice(2) : flat
 }
 
 const lastGoodByPath = new Map<string, BehaviorConfig>()

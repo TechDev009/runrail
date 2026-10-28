@@ -5,6 +5,7 @@ import { AccountError, InMemoryAccountStore, type AccountReference } from "../ac
 import { CredentialRefreshError, CredentialStoreError, VaultCredentialBroker, type CredentialRefresher } from "../auth/broker.ts"
 import { createBrowserSignIn, createRefreshTokenRefresher, tokenCredential } from "../auth/flows.ts"
 import { withFileLock } from "../auth/lock.ts"
+import { isPrivateHost } from "../net/redirect.ts"
 import { RUNRAIL_USER_AGENT } from "../providers/http.ts"
 import { oauthErrorWord, signInEndpoint, signInGet, signInPost } from "../auth/signin-http.ts"
 import { SignInError, type SignInFlow } from "../auth/signin-types.ts"
@@ -301,16 +302,19 @@ export class McpOAuth implements McpSignIns {
     }
   }
 
-  async #read(): Promise<Map<string, ServerEntry>> {
+  /** With `forWrite`, a file that cannot be parsed is set aside, not overwritten by the empty list that follows it. */
+  async #read(forWrite = false): Promise<Map<string, ServerEntry>> {
     let text: string
     try {
       text = await readFile(this.#file, "utf8")
-    } catch {
+    } catch (error) {
+      if (forWrite && !(error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT")) throw error
       return new Map()
     }
     try {
       return entriesOf(JSON.parse(text) as unknown)
     } catch {
+      if (forWrite) await rename(this.#file, `${this.#file}.corrupt`).catch(() => undefined)
       return new Map()
     }
   }
@@ -328,7 +332,7 @@ export class McpOAuth implements McpSignIns {
   async #change(apply: (entries: Map<string, ServerEntry>) => void): Promise<void> {
     await mkdir(dirname(this.#lock), { recursive: true, mode: 0o700 })
     await withFileLock(this.#lock, async () => {
-      const entries = await this.#read()
+      const entries = await this.#read(true)
       apply(entries)
       const temporary = `${this.#file}.${randomBytes(6).toString("hex")}.tmp`
       await writeFile(temporary, `${JSON.stringify({ version: 1, servers: Object.fromEntries(entries) }, null, 2)}\n`, { mode: 0o600 })
@@ -391,13 +395,19 @@ export async function discoverMcpOAuth(value: string, signal: AbortSignal): Prom
   const url = canonicalMcpUrl(value)
   const server = new URL(url)
   const challenge = await probe(url, signal)
+  // Every address the server names is reached from this machine, so a remote server may not aim it at a private one.
+  const reach = (address: string, what: string): URL => {
+    const endpoint = signInEndpoint(address, what)
+    if (!isPrivateHost(server.hostname) && isPrivateHost(endpoint.hostname)) throw new SignInError("AUTH_INVALID", `${what} points at a private address`)
+    return endpoint
+  }
   const path = server.pathname === "/" ? "" : server.pathname
   const metadataAddresses = [
-    ...(challenge.resourceMetadata === undefined ? [] : [challenge.resourceMetadata]),
+    ...(challenge.resourceMetadata === undefined || (!isPrivateHost(server.hostname) && isPrivateHost(new URL(challenge.resourceMetadata).hostname)) ? [] : [challenge.resourceMetadata]),
     ...(path.length === 0 ? [] : [`${server.origin}/.well-known/oauth-protected-resource${path}`]),
     `${server.origin}/.well-known/oauth-protected-resource`,
   ]
-  const resourceMetadata = await firstMetadata(metadataAddresses, signal, (body) => Array.isArray(body.authorization_servers) && body.authorization_servers.length > 0)
+  const resourceMetadata = await firstMetadata(metadataAddresses, signal, reach, (body) => Array.isArray(body.authorization_servers) && body.authorization_servers.length > 0)
   let resource = url
   let issuer = server.origin
   let scope = challenge.scope
@@ -410,7 +420,7 @@ export async function discoverMcpOAuth(value: string, signal: AbortSignal): Prom
     }
     const first = (resourceMetadata.authorization_servers as unknown[])[0]
     if (typeof first !== "string") throw new SignInError("AUTH_RESPONSE_INVALID", "the server's metadata names no authorization server")
-    issuer = signInEndpoint(first, "authorization server").toString().replace(/\/$/, "")
+    issuer = reach(first, "authorization server").toString().replace(/\/$/, "")
     scope ??= scopeOf(resourceMetadata.scopes_supported)
   } else if (challenge.status !== 401) {
     throw new SignInError("AUTH_UNSUPPORTED", "the server asks for no sign-in")
@@ -420,16 +430,16 @@ export async function discoverMcpOAuth(value: string, signal: AbortSignal): Prom
   const serverAddresses = issuerPath.length === 0
     ? [`${issuerUrl.origin}/.well-known/oauth-authorization-server`, `${issuerUrl.origin}/.well-known/openid-configuration`]
     : [`${issuerUrl.origin}/.well-known/oauth-authorization-server${issuerPath}`, `${issuerUrl.origin}/.well-known/openid-configuration${issuerPath}`, `${issuerUrl.origin}${issuerPath}/.well-known/openid-configuration`]
-  const metadata = await firstMetadata(serverAddresses, signal, (body) => typeof body.authorization_endpoint === "string" && typeof body.token_endpoint === "string")
+  const metadata = await firstMetadata(serverAddresses, signal, reach, (body) => typeof body.authorization_endpoint === "string" && typeof body.token_endpoint === "string")
   if (metadata === undefined) throw new SignInError("AUTH_UNSUPPORTED", "the server's authorization server publishes no metadata")
   const methods = metadata.code_challenge_methods_supported
   if (!Array.isArray(methods) || !methods.includes("S256")) throw new SignInError("AUTH_UNSUPPORTED", "the authorization server does not support PKCE")
   return Object.freeze({
     url,
     resource,
-    authorizeUrl: signInEndpoint(metadata.authorization_endpoint as string, "authorize address").toString(),
-    tokenUrl: signInEndpoint(metadata.token_endpoint as string, "token address").toString(),
-    ...(typeof metadata.registration_endpoint === "string" ? { registrationUrl: signInEndpoint(metadata.registration_endpoint, "registration address").toString() } : {}),
+    authorizeUrl: reach(metadata.authorization_endpoint as string, "authorize address").toString(),
+    tokenUrl: reach(metadata.token_endpoint as string, "token address").toString(),
+    ...(typeof metadata.registration_endpoint === "string" ? { registrationUrl: reach(metadata.registration_endpoint, "registration address").toString() } : {}),
     ...(scope === undefined ? {} : { scope }),
   })
 }
@@ -474,9 +484,9 @@ function challengeParams(header: string): Readonly<Record<string, string>> {
   return params
 }
 
-async function firstMetadata(addresses: readonly string[], signal: AbortSignal, usable: (body: Record<string, unknown>) => boolean): Promise<Record<string, unknown> | undefined> {
+async function firstMetadata(addresses: readonly string[], signal: AbortSignal, reach: (address: string, what: string) => URL, usable: (body: Record<string, unknown>) => boolean): Promise<Record<string, unknown> | undefined> {
   for (const address of [...new Set(addresses)]) {
-    const answer = await signInGet(signInEndpoint(address, "metadata address"), signal, DISCOVERY_MS)
+    const answer = await signInGet(reach(address, "metadata address"), signal, DISCOVERY_MS)
     if (answer.status >= 200 && answer.status < 300 && answer.body !== undefined && usable(answer.body)) return answer.body
   }
   return undefined

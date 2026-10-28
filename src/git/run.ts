@@ -6,6 +6,7 @@ import { repositoryProgramOverrides } from "./repo-config.ts"
 export const GIT_DEFAULT_TIMEOUT_MS = 30_000
 export const GIT_DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 const MAX_STDERR_BYTES = 16 * 1024
+const OUTPUT_DRAIN_MS = 1_000
 const SIGNING_ENVIRONMENT = ["SSH_AUTH_SOCK", "GNUPGHOME", "GPG_TTY"] as const
 /** Transport variables a push or fetch needs to reach a remote; credentials stay in the user's helpers. */
 const NETWORK_ENVIRONMENT = [
@@ -90,11 +91,14 @@ export async function runGit(options: GitRunOptions): Promise<GitRunResult> {
   }
   const timer = setTimeout(() => { timedOut = true; kill() }, timeoutMs)
   options.signal?.addEventListener("abort", kill, { once: true })
+  // A helper git started (a hook daemon, an ssh control master) can keep its pipes open for good; once git
+  // itself has exited, what it printed is what there is.
+  const goneAndDrained = child.exited.then(() => new Promise<void>((resolve) => setTimeout(resolve, OUTPUT_DRAIN_MS)), () => undefined)
   try {
     // Output is drained while stdin is written: git can fill its output pipe before it reads all of its input.
     const [stdout, stderr, exitCode] = await Promise.all([
-      collect(child.stdout, maxOutputBytes, kill),
-      collect(child.stderr, MAX_STDERR_BYTES, () => {}),
+      collect(child.stdout, maxOutputBytes, kill, goneAndDrained),
+      collect(child.stderr, MAX_STDERR_BYTES, () => {}, goneAndDrained),
       child.exited,
       writeChildInput(child.stdin, options.stdin),
     ])
@@ -148,15 +152,19 @@ async function collect(
   stream: ReadableStream<Uint8Array>,
   maxBytes: number,
   onOverflow: () => void,
+  stopped?: Promise<void>,
 ): Promise<{ readonly bytes: Uint8Array; readonly overflow: boolean }> {
   const chunks: Uint8Array[] = []
   let size = 0
   let overflow = false
   const reader = stream.getReader()
+  let cut = false
   try {
     for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
+      const next = stopped === undefined ? await reader.read() : await Promise.race([reader.read(), stopped.then(() => ({ done: true as const, value: undefined, cut: true }))])
+      if ("cut" in next) cut = true
+      const { done, value } = next
+      if (done || value === undefined) break
       if (overflow) continue
       const room = maxBytes - size
       if (value.byteLength > room) {
@@ -170,7 +178,8 @@ async function collect(
       size += value.byteLength
     }
   } finally {
-    reader.releaseLock()
+    if (cut) await reader.cancel().catch(() => undefined)
+    else reader.releaseLock()
   }
   const bytes = new Uint8Array(size)
   let offset = 0

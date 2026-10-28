@@ -2,6 +2,7 @@ import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir,
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { GitError } from "../git/errors.ts"
+import { writeFileAtomic } from "../runtime/atomic-write.ts"
 import { RUNRAIL_RUNTIME_DIRS, isRunrailRuntimePath, parseGitPath, stripPrefix } from "../git/paths.ts"
 import { runGit, type GitRunOptions, type GitRunResult } from "../git/run.ts"
 import { outsideWorkTree, probeGitRepository, type GitRepository } from "../git/status.ts"
@@ -393,17 +394,30 @@ export class TurnCheckpoints {
 
   async #load(): Promise<TurnCheckpoint[]> {
     if (this.#list !== undefined) return this.#list
-    const text = await readFile(join(this.#dir, LIST_FILE), "utf8").catch(() => undefined)
+    const file = join(this.#dir, LIST_FILE)
+    let text: string | undefined
+    try {
+      text = await readFile(file, "utf8")
+    } catch (error) {
+      // Only a missing list is an empty one: reading it as empty after any other failure would let the
+      // next capture overwrite it and orphan the refs it names.
+      if (!(error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT")) throw error
+    }
+    if (text !== undefined) {
+      try {
+        JSON.parse(text)
+      } catch {
+        await rename(file, `${file}.corrupt`).catch(() => undefined)
+        text = undefined
+      }
+    }
     this.#list = text === undefined ? [] : parseList(text)
     return this.#list
   }
 
   async #save(list: readonly TurnCheckpoint[]): Promise<void> {
     await mkdir(this.#dir, { recursive: true })
-    const file = join(this.#dir, LIST_FILE)
-    const staged = `${file}.${String(process.pid)}.tmp`
-    await writeFile(staged, `${JSON.stringify({ version: 1, checkpoints: list })}\n`, { mode: 0o600 })
-    await rename(staged, file)
+    await writeFileAtomic(join(this.#dir, LIST_FILE), `${JSON.stringify({ version: 1, checkpoints: list })}\n`)
   }
 
   /** Git in the shadow repository, its work tree the workspace's repository (or the folder itself). */

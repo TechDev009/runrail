@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { isIP } from "node:net"
+import { isPrivateHost } from "../net/redirect.ts"
 import { ProviderError, refusedField } from "../providers/errors.ts"
 import { createProviderHttpClient } from "../providers/http.ts"
 import { resolveProviderTarget } from "../providers/presets.ts"
@@ -200,15 +200,6 @@ async function download(url: string, signal: AbortSignal | undefined): Promise<U
     clearTimeout(timer)
     signal?.removeEventListener("abort", abort)
   }
-}
-
-function isPrivateHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase()
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".") && isIP(host) === 0) return true
-  if (isIP(host) === 6) return host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe8") || host.startsWith("fe9") || host.startsWith("fea") || host.startsWith("feb") || host.startsWith("::ffff:")
-  if (isIP(host) !== 4) return false
-  const [first, second] = host.split(".").map(Number) as [number, number]
-  return first === 0 || first === 10 || first === 127 || (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127)
 }
 
 /** The picture's real type, from its first bytes. */

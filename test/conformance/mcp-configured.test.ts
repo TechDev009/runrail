@@ -97,7 +97,7 @@ describe("MCP servers from the behavior file", () => {
       { name: "docs", state: "ready", tools: 0 },
       { name: "unset", state: "failed", tools: 0, code: "MCP_TOKEN_MISSING" },
     ])
-    expect(seen).toEqual([{ url: "https://mcp.example.com/mcp", allowRemote: true, timeoutMs: 20_000, headers: { authorization: "Bearer docs-token-value" } }])
+    expect(seen).toEqual([{ url: "https://mcp.example.com/mcp", allowRemote: true, timeoutMs: 20_000, callTimeoutMs: 120_000, headers: { authorization: "Bearer docs-token-value" } }])
     await configured.close()
   })
 

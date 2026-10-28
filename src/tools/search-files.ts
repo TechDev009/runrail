@@ -1,5 +1,5 @@
 import type { NativeTool } from "@nifrajs/coding-agent"
-import type { WorkspacePolicy } from "../workspace/policy.ts"
+import type { WorkspacePolicy, WorkspaceReport } from "../workspace/policy.ts"
 
 export function createSearchFilesTool(policy: WorkspacePolicy): NativeTool {
   return {
@@ -8,7 +8,10 @@ export function createSearchFilesTool(policy: WorkspacePolicy): NativeTool {
     capabilities: ["filesystem.read"],
     execute: async (input) => {
       const value = parseSearchInput(input)
-      return { matches: await policy.search(value.path, value.query, value.maxResults, value.maxFileBytes) }
+      const report: WorkspaceReport = { truncated: false, skipped: 0 }
+      const matches = await policy.search(value.path, value.query, value.maxResults, value.maxFileBytes, report)
+      // Said aloud, so a partial search is not read as "the text is nowhere".
+      return { matches, ...(report.truncated ? { truncated: true } : {}), ...(report.skipped > 0 ? { skippedFiles: report.skipped } : {}) }
     },
   }
 }

@@ -1,7 +1,7 @@
 import { lstat, open, readFile, realpath, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve } from "node:path"
 import type { NativeModelPort, NativeModelRequest } from "@nifrajs/coding-agent"
-import type { WorkspacePolicy } from "../workspace/policy.ts"
+import { isSensitiveWorkspacePath, type WorkspacePolicy } from "../workspace/policy.ts"
 import { SkillRegistry, type SkillDescriptor } from "../skills/registry.ts"
 import {
   isImageMediaType,
@@ -265,6 +265,8 @@ export class ContextResourceSet {
   private async inlineReference(reference: string): Promise<string | undefined> {
     const trimmed = reference.replace(/\.+$/, "")
     for (const candidate of trimmed.length === 0 || trimmed === reference ? [reference] : [reference, trimmed]) {
+      // `@x.pem` in a sentence is text; a credential file is never attached, and never a reason to drop the prompt.
+      if (isSensitiveWorkspacePath(candidate)) return undefined
       let absolute: string
       try {
         absolute = await this.policy.resolveExisting(candidate)
