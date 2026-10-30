@@ -1,1 +1,1 @@
-export const RUNRAIL_VERSION = "0.1.2" as const
+export const RUNRAIL_VERSION = "0.2.0" as const

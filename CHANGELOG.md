@@ -4,6 +4,13 @@ All notable changes to Runrail will be documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
+Recall by meaning, sign-in to remote MCP servers, connectors on more routes,
+setup runs that resume, and fixes from a security and robustness audit. Runrail
+0.1.1 and 0.1.2 were never released, so this release also brings their changes,
+listed below.
+
 - Built on the public Nifra 5.8.0 packages (was 5.3.0), and `runrail new`
   starters scaffold with `create-nifra@5.8.0`.
 - Recall by meaning. Pick an embedding model on one of your connections and
@@ -44,10 +51,40 @@ All notable changes to Runrail will be documented here.
   same results Desktop lists; `runrail eval list` shows them. Up to four evals
   now run at once in a project (was one).
 
+### Security
+
+- File tools refuse paths that run programs on their own: `.husky`,
+  `.githooks`, `.codex`, `.mcp.json`, `.claude/settings*`, `.claude/hooks`, and
+  `.vscode/tasks.json`. They no longer follow a link swapped in after the check.
+- Sign-in to a remote MCP server no longer follows the server to a private
+  address, and a damaged OAuth file is set aside instead of overwritten. One
+  shared private-address check now serves every fetch that needs it.
+- Tool descriptions from an MCP server are capped in length.
+- `run_command` rejects input fields it does not read and drops relative
+  `PATH` entries. The approval card shows the folder the command runs in.
+- A Codex tool call must name the turn that is running. The Claude Code route
+  reads user settings only. `install.sh` requires https.
+
 ### Fixes
 
 - The Linear connector sends your personal API key the way Linear's API
   asks, with no `Bearer` prefix.
+- An MCP server's failed HTTP request fails only itself, and a server that
+  forgot your session starts a new one and the call is retried. Tool calls get
+  their own 120-second timeout. A reply with audio or resource blocks is noted
+  instead of failing, and a tool with a badly formed name is skipped instead of
+  failing the whole server.
+- `runGit` returns once git exits, even if a helper holds its pipes open, and
+  git in a worktree has a timeout and ends its whole process group.
+- `search_files`, `find_files` and `list_files` say when a result is partial
+  (`truncated`, `skippedFiles`), and search now reaches 8,192 files.
+- `.env.example` is readable, and a project under a `.ssh` folder is no longer
+  refused.
+- One plugin or package folder that fails verification no longer stops startup;
+  it is listed as unavailable, and `plugins reload` still reports it.
+- The share, push (VAPID), connector and checkpoint stores hold up under
+  concurrent writes and damaged files. Device sign-in survives a network blip.
+  Live frames, terminal output and transcript reads are faster.
 
 ## [0.1.2] - 2026-10-25
 

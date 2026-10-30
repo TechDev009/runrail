@@ -228,7 +228,7 @@ anyone. `RUNRAIL_NIFRA=on` turns these on in every project.
 
 ## Status
 
-Runrail is at 0.1.2. These features pass their tests against stand-ins (a fake `gh`, mock
+Runrail is at 0.2.0. These features pass their tests against stand-ins (a fake `gh`, mock
 services) but have never run against the real thing. Expect rough edges, and
 [report what breaks](https://github.com/TechDev009/runrail/issues):
 
