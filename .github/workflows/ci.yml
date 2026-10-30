@@ -52,7 +52,10 @@ jobs:
         if: runner.os == 'Linux'
         run: bun run source:check
 
+      # A step that times out fails, which continue-on-error covers; a job that times out is
+      # cancelled, which it does not, and the release job would never run.
       - name: Run tests
+        timeout-minutes: 15
         run: bun test
 
       - name: Pack published Nifra artifacts
